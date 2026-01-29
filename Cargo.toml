@@ -1,0 +1,13 @@
+[package]
+name = "shrinker"
+version = "0.1.0"
+edition = "2024"
+
+
+[dependencies]
+regex = "1.10"         # Pour repérer les IPs et données sensibles
+chrono = "0.4"        # Pour la gestion intelligente du temps
+clap = { version = "4.4", features = ["derive"] } # Pour une interface pro (--help, --file)
+colored = "2.1"       # Pour un affichage magnifique dans le terminal
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"

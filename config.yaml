@@ -1,0 +1,3 @@
+mask_ips: true
+threshold: 5
+output_file: "rapport_final.log"

@@ -1,0 +1,62 @@
+# 🚀 Telemetry Shrinker Agent
+
+**Telemetry Shrinker** est un agent de télémétrie ultra-léger écrit en **Rust**, conçu pour réduire drastiquement les coûts de stockage et de transfert de logs dans le Cloud (AWS, Azure, Google Cloud).
+
+Il est particulièrement adapté pour tourner sur des infrastructures à ressources limitées comme le **Raspberry Pi** ou dans des environnements **Kubernetes**.
+
+## 💡 Pourquoi utiliser Shrinker ?
+
+Dans une infrastructure moderne, 70% des logs sont du "bruit" (répétitions, messages de succès inutiles). Les fournisseurs Cloud facturent au volume.
+Shrinker permet de :
+- **Réduire le volume de logs** de 60% à 90% via un dédoublonnage intelligent.
+- **Sécuriser les données** en masquant automatiquement les adresses IP (Anonymisation).
+- **Économiser de l'argent** en ne transmettant que les informations critiques.
+
+## ✨ Fonctionnalités
+
+- 🦀 **Performance Rust** : Consommation CPU/RAM proche de zéro.
+- 🛡️ **Security First** : Masquage automatique des adresses IPv4.
+- ⚙️ **Configurable** : Pilotage via un fichier `config.yaml`.
+- 📊 **Rapport ROI** : Calcule en temps réel l'économie réalisée.
+- 📂 **Multi-Source** : Lit depuis un fichier ou en direct via `stdin`.
+
+## 🚀 Installation Rapide
+
+### Pré-requis
+- Rust & Cargo installés (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
+
+### Construction
+```bash
+git clone https://github.com/votre-utilisateur/shrinker-rust.git
+cd shrinker-rust
+cargo build --release
+```
+
+## 🛠️ Utilisation
+
+### Mode Agent (Temps réel)
+```bash
+tail -f /var/log/syslog | ./target/release/shrinker
+```
+
+### Analyse de fichier
+```bash
+./target/release/shrinker --file production.log
+```
+
+## ⚙️ Configuration (`config.yaml`)
+
+```yaml
+mask_ips: true      # Masquer les adresses IP pour la sécurité
+threshold: 5        # Ne logger que si le message se répète 5 fois
+output_file: "out.log" # Sauvegarder le résultat ici
+```
+
+## 📈 RoadMap
+- [ ] Support du masquage IPv6.
+- [ ] Envoi direct vers Discord/Slack via Webhooks.
+- [ ] Parsing JSON intelligent pour Kubernetes.
+
+---
+Projet créé dans le cadre d'un apprentissage Rust orienté **DevOps & Infrastructure**.
+
