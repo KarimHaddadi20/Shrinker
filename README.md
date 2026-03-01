@@ -36,7 +36,8 @@ cargo build --release
 
 ### Mode Agent (Temps réel)
 ```bash
-tail -f /var/log/syslog | ./target/release/shrinker
+# Redirige la sortie vers un autre fichier ou un pipe
+tail -f /var/log/syslog | ./target/release/shrinker > logs_propres.log
 ```
 
 ### Analyse de fichier
@@ -49,7 +50,7 @@ tail -f /var/log/syslog | ./target/release/shrinker
 ```yaml
 mask_ips: true      # Masquer les adresses IP pour la sécurité
 threshold: 5        # Ne logger que si le message se répète 5 fois
-output_file: "out.log" # Sauvegarder le résultat ici
+output_file: null   # null = Sortie Standard (stdout), ou mettre "out.log" pour un fichier
 ```
 
 ## 📈 RoadMap

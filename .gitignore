@@ -1,1 +1,5 @@
 /target
+*.log
+*.txt
+config_with_output.yaml
+null

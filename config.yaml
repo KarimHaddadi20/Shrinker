@@ -1,3 +1,4 @@
 mask_ips: true
 threshold: 5
-output_file: "rapport_final.log"
+# output_file: "rapport_final.log" # Décommentez pour écrire dans un fichier
+output_file: null # Mettre à null ou supprimer la ligne pour écrire dans la console (stdout)
