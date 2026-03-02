@@ -158,21 +158,18 @@ fn check_alert(msg: &str, count: u32, config: &Config, silent_mode: bool) {
                 eprintln!("{} {} (x{})", "🚨 ENVOI ALERTE :".red().bold(), msg, count);
             }
             
-            // Construction manuelle du JSON pour éviter la dépendance serde_json
-            // Attention : ceci est une version simplifiée qui ne gère pas l'échappement complexe des caractères spéciaux dans msg
-            // Pour un usage prod, il faudrait échapper les guillemets et backslashes dans msg
-            let safe_msg = msg.replace("\"", "\\\"").replace("\n", "\\n");
+            // Construction manuelle du JSON
+            // On échappe les caractères spéciaux basiques
+            let safe_msg = msg.replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "");
             let json_body = format!(r#"{{"content": "🚨 **ALERTE CRITIQUE**\nMessage répété **{} fois**\n`{}`"}}"#, count, safe_msg);
 
-            // On utilise curl via Command pour éviter les dépendances réseau Rust qui échouent dans l'environnement
-            // spawn() lance la commande en arrière-plan sans bloquer
+            // On lance curl en arrière-plan (spawn) pour ne pas bloquer le traitement des logs
             let _ = Command::new("curl")
                 .arg("-X").arg("POST")
                 .arg("-H").arg("Content-Type: application/json")
                 .arg("-d").arg(&json_body)
                 .arg(&alert.webhook_url)
-                // On redirige stdout/stderr vers null pour ne pas polluer, sauf si on veut debugger
-                .stdout(std::process::Stdio::null()) 
+                .stdout(std::process::Stdio::null()) // Mode silencieux
                 .stderr(std::process::Stdio::null())
                 .spawn();
         }
