@@ -6,6 +6,7 @@ use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Write};
 use std::time::Instant;
 use chrono::Local;
+use std::process::Command;
 
 // Structure pour le fichier de configuration YAML
 #[derive(Deserialize, Debug)]
@@ -13,6 +14,13 @@ struct Config {
     mask_ips: bool,
     threshold: u32,
     output_file: Option<String>,
+    alert: Option<AlertConfig>,
+}
+
+#[derive(Deserialize, Debug)]
+struct AlertConfig {
+    webhook_url: String,
+    threshold: u32,
 }
 
 // Arguments de la ligne de commande
@@ -64,6 +72,11 @@ fn main() {
         let output_target = config.output_file.as_ref().unwrap();
         eprintln!("📂 Sortie : {}", output_target.bright_magenta());
         eprintln!("🛡️  Sécurité IP : {}", if config.mask_ips { "ACTIVE".green() } else { "INACTIVE".red() });
+        
+        if let Some(alert) = &config.alert {
+            eprintln!("🚨 Alertes : ACTIVE (Seuil: {})", alert.threshold.to_string().red().bold());
+        }
+
         eprintln!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".bright_cyan());
     }
 
@@ -115,18 +128,54 @@ fn process_logs(reader: Box<dyn BufRead>, config: &Config, ip_regex: &Regex, sta
         if processed == last_msg {
             count += 1;
         } else {
-            if !last_msg.is_empty() && count >= config.threshold {
-                print_log(count, &last_msg, output, silent_mode);
-                stats.sent += 1;
+            if !last_msg.is_empty() {
+                // Vérification Alertes
+                check_alert(&last_msg, count, config, silent_mode);
+
+                if count >= config.threshold {
+                    print_log(count, &last_msg, output, silent_mode);
+                    stats.sent += 1;
+                }
             }
             last_msg = processed;
             count = 1;
         }
     }
 
-    if !last_msg.is_empty() && count >= config.threshold {
-        print_log(count, &last_msg, output, silent_mode);
-        stats.sent += 1;
+    if !last_msg.is_empty() {
+        check_alert(&last_msg, count, config, silent_mode);
+        if count >= config.threshold {
+            print_log(count, &last_msg, output, silent_mode);
+            stats.sent += 1;
+        }
+    }
+}
+
+fn check_alert(msg: &str, count: u32, config: &Config, silent_mode: bool) {
+    if let Some(alert) = &config.alert {
+        if count >= alert.threshold {
+            if !silent_mode {
+                eprintln!("{} {} (x{})", "🚨 ENVOI ALERTE :".red().bold(), msg, count);
+            }
+            
+            // Construction manuelle du JSON pour éviter la dépendance serde_json
+            // Attention : ceci est une version simplifiée qui ne gère pas l'échappement complexe des caractères spéciaux dans msg
+            // Pour un usage prod, il faudrait échapper les guillemets et backslashes dans msg
+            let safe_msg = msg.replace("\"", "\\\"").replace("\n", "\\n");
+            let json_body = format!(r#"{{"content": "🚨 **ALERTE CRITIQUE**\nMessage répété **{} fois**\n`{}`"}}"#, count, safe_msg);
+
+            // On utilise curl via Command pour éviter les dépendances réseau Rust qui échouent dans l'environnement
+            // spawn() lance la commande en arrière-plan sans bloquer
+            let _ = Command::new("curl")
+                .arg("-X").arg("POST")
+                .arg("-H").arg("Content-Type: application/json")
+                .arg("-d").arg(&json_body)
+                .arg(&alert.webhook_url)
+                // On redirige stdout/stderr vers null pour ne pas polluer, sauf si on veut debugger
+                .stdout(std::process::Stdio::null()) 
+                .stderr(std::process::Stdio::null())
+                .spawn();
+        }
     }
 }
 

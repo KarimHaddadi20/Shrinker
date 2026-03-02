@@ -51,11 +51,17 @@ tail -f /var/log/syslog | ./target/release/shrinker > logs_propres.log
 mask_ips: true      # Masquer les adresses IP pour la sécurité
 threshold: 5        # Ne logger que si le message se répète 5 fois
 output_file: null   # null = Sortie Standard (stdout), ou mettre "out.log" pour un fichier
+
+# Section Alertes (Optionnel)
+alert:
+  webhook_url: "https://discord.com/api/webhooks/..." # URL de votre Webhook
+  threshold: 50 # Déclenche une alerte si le message se répète 50 fois
 ```
 
 ## 📈 RoadMap
+- [x] Support du masquage IPv4.
+- [x] Envoi direct vers Discord/Slack via Webhooks.
 - [ ] Support du masquage IPv6.
-- [ ] Envoi direct vers Discord/Slack via Webhooks.
 - [ ] Parsing JSON intelligent pour Kubernetes.
 
 ---
