@@ -56,7 +56,10 @@ fn main() {
     let config: Config = serde_yaml::from_str(&config_str)
         .expect("❌ Erreur de format dans le fichier YAML");
 
-    let ip_regex = Regex::new(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}").unwrap();
+    let ipv4_regex = Regex::new(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}").unwrap();
+    let ipv6_regex = Regex::new(
+        r"(?i)[0-9a-f]{1,4}(:[0-9a-f]{1,4}){7}|([0-9a-f]{1,4}:)+:([0-9a-f]{1,4}:)*[0-9a-f]{1,4}|([0-9a-f]{1,4}:)+:|::[0-9a-f]{1,4}(:[0-9a-f]{1,4})*|::"
+    ).unwrap();
 
     // Détermine si on est en mode fichier ou stdout
     let is_stdout_mode = match &config.output_file {
@@ -99,7 +102,7 @@ fn main() {
     };
 
     // 4. Traitement
-    process_logs(input, &config, &ip_regex, &mut stats, &mut output, is_stdout_mode);
+    process_logs(input, &config, &ipv4_regex, &ipv6_regex, &mut stats, &mut output, is_stdout_mode);
 
     // On affiche le rapport final seulement si on n'est PAS en mode stdout
     if !is_stdout_mode {
@@ -107,7 +110,7 @@ fn main() {
     }
 }
 
-fn process_logs(reader: Box<dyn BufRead>, config: &Config, ip_regex: &Regex, stats: &mut Stats, output: &mut Box<dyn Write>, silent_mode: bool) {
+fn process_logs(reader: Box<dyn BufRead>, config: &Config, ipv4_regex: &Regex, ipv6_regex: &Regex, stats: &mut Stats, output: &mut Box<dyn Write>, silent_mode: bool) {
     let mut last_msg = String::new();
     let mut count = 0;
 
@@ -122,7 +125,8 @@ fn process_logs(reader: Box<dyn BufRead>, config: &Config, ip_regex: &Regex, sta
 
         let mut processed = clean_timestamp(&line);
         if config.mask_ips {
-            processed = ip_regex.replace_all(&processed, "[MASKED_IP]").to_string();
+            processed = ipv4_regex.replace_all(&processed, "[MASKED_IPv4]").to_string();
+            processed = ipv6_regex.replace_all(&processed, "[MASKED_IPv6]").to_string();
         }
 
         if processed == last_msg {
