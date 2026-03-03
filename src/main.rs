@@ -23,17 +23,39 @@ struct AlertConfig {
     threshold: u32,
 }
 
-// Arguments de la ligne de commande
 #[derive(Parser, Debug)]
-#[command(author, version, about)]
+#[command(
+    name = "shrinker",
+    version,
+    about = "Agent de telemetrie ultra-leger ecrit en Rust",
+    long_about = "Shrinker reduit le volume de logs via deduplication intelligente et masquage IP (IPv4/IPv6).\n\
+                  Il peut envoyer des alertes Webhook (Discord/Slack) en cas d'erreur critique repetee.\n\n\
+                  EXEMPLES:\n\
+                  \n  Analyser un fichier de logs:\n    shrinker --file production.log\
+                  \n\n  Mode temps reel (pipe Unix):\n    tail -f /var/log/syslog | shrinker > clean.log\
+                  \n\n  Surcharger le seuil de deduplication:\n    shrinker --file app.log --threshold 10\
+                  \n\n  Desactiver le masquage IP:\n    shrinker --file app.log --no-mask-ips",
+)]
 struct Args {
-    /// Chemin vers le fichier de configuration YAML
+    /// Fichier de log a analyser (stdin si omis)
+    #[arg(short, long)]
+    file: Option<String>,
+
+    /// Fichier de configuration YAML
     #[arg(short, long, default_value = "config.yaml")]
     config: String,
 
-    /// Fichier de log à analyser (si vide, utilise l'entrée standard)
+    /// Seuil de deduplication (surcharge la valeur du config.yaml)
     #[arg(short, long)]
-    file: Option<String>,
+    threshold: Option<u32>,
+
+    /// Desactiver le masquage des adresses IP
+    #[arg(long)]
+    no_mask_ips: bool,
+
+    /// Mode simulation : affiche ce qui serait fait sans rien ecrire
+    #[arg(long)]
+    dry_run: bool,
 }
 
 struct Stats {
@@ -50,11 +72,18 @@ fn main() {
         start_time: Instant::now(),
     };
 
-    // 1. Chargement de la configuration
+    // 1. Chargement de la configuration (YAML + surcharges CLI)
     let config_str = fs::read_to_string(&args.config)
         .expect("❌ Impossible de lire le fichier de configuration");
-    let config: Config = serde_yaml::from_str(&config_str)
+    let mut config: Config = serde_yaml::from_str(&config_str)
         .expect("❌ Erreur de format dans le fichier YAML");
+
+    if let Some(t) = args.threshold {
+        config.threshold = t;
+    }
+    if args.no_mask_ips {
+        config.mask_ips = false;
+    }
 
     let ipv4_regex = Regex::new(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}").unwrap();
     let ipv6_regex = Regex::new(
@@ -94,7 +123,7 @@ fn main() {
 
     // 3. Sélection de la source
     let input: Box<dyn BufRead> = match args.file {
-        Some(path) => {
+        Some(ref path) => {
             let f = File::open(path).expect("❌ Impossible d'ouvrir le fichier source");
             Box::new(BufReader::new(f))
         }
@@ -102,15 +131,26 @@ fn main() {
     };
 
     // 4. Traitement
-    process_logs(input, &config, &ipv4_regex, &ipv6_regex, &mut stats, &mut output, is_stdout_mode);
+    if args.dry_run {
+        eprintln!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".bright_cyan());
+        eprintln!("{}", "🧪 MODE DRY-RUN (Simulation, aucune ecriture)".bright_yellow().bold());
+        eprintln!("📂 Source : {}", args.file.as_deref().unwrap_or("stdin"));
+        eprintln!("🛡️  Masquage IP : {}", if config.mask_ips { "ACTIVE" } else { "INACTIVE" });
+        eprintln!("📊 Seuil : {}", config.threshold);
+        if let Some(alert) = &config.alert {
+            eprintln!("🚨 Alertes : Seuil {}", alert.threshold);
+        }
+        eprintln!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".bright_cyan());
+    }
 
-    // On affiche le rapport final seulement si on n'est PAS en mode stdout
-    if !is_stdout_mode {
+    process_logs(input, &config, &ipv4_regex, &ipv6_regex, &mut stats, &mut output, is_stdout_mode, args.dry_run);
+
+    if !is_stdout_mode || args.dry_run {
         display_final_report(&stats);
     }
 }
 
-fn process_logs(reader: Box<dyn BufRead>, config: &Config, ipv4_regex: &Regex, ipv6_regex: &Regex, stats: &mut Stats, output: &mut Box<dyn Write>, silent_mode: bool) {
+fn process_logs(reader: Box<dyn BufRead>, config: &Config, ipv4_regex: &Regex, ipv6_regex: &Regex, stats: &mut Stats, output: &mut Box<dyn Write>, silent_mode: bool, dry_run: bool) {
     let mut last_msg = String::new();
     let mut count = 0;
 
@@ -133,11 +173,15 @@ fn process_logs(reader: Box<dyn BufRead>, config: &Config, ipv4_regex: &Regex, i
             count += 1;
         } else {
             if !last_msg.is_empty() {
-                // Vérification Alertes
-                check_alert(&last_msg, count, config, silent_mode);
-
+                if !dry_run {
+                    check_alert(&last_msg, count, config, silent_mode);
+                }
                 if count >= config.threshold {
-                    print_log(count, &last_msg, output, silent_mode);
+                    if !dry_run {
+                        print_log(count, &last_msg, output, silent_mode);
+                    } else {
+                        eprintln!("  {} [x{}] {}", ">>".bright_yellow(), count, last_msg);
+                    }
                     stats.sent += 1;
                 }
             }
@@ -147,9 +191,15 @@ fn process_logs(reader: Box<dyn BufRead>, config: &Config, ipv4_regex: &Regex, i
     }
 
     if !last_msg.is_empty() {
-        check_alert(&last_msg, count, config, silent_mode);
+        if !dry_run {
+            check_alert(&last_msg, count, config, silent_mode);
+        }
         if count >= config.threshold {
-            print_log(count, &last_msg, output, silent_mode);
+            if !dry_run {
+                print_log(count, &last_msg, output, silent_mode);
+            } else {
+                eprintln!("  {} [x{}] {}", ">>".bright_yellow(), count, last_msg);
+            }
             stats.sent += 1;
         }
     }
