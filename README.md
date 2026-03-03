@@ -61,7 +61,7 @@ alert:
 ## 📈 RoadMap
 - [x] Support du masquage IPv4.
 - [x] Envoi direct vers Discord/Slack via Webhooks.
-- [ ] Support du masquage IPv6.
+- [x] Support du masquage IPv6.
 - [ ] Parsing JSON intelligent pour Kubernetes.
 
 ---
