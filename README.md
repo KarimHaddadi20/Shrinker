@@ -15,10 +15,12 @@ Shrinker permet de :
 ## ✨ Fonctionnalités
 
 - 🦀 **Performance Rust** : Consommation CPU/RAM proche de zéro.
-- 🛡️ **Security First** : Masquage automatique des adresses IPv4.
+- 🛡️ **Security First** : Masquage automatique des adresses IPv4 et IPv6.
+- 🔍 **JSON Intelligent** : Parsing automatique des logs JSON (Kubernetes, Docker, etc.).
 - ⚙️ **Configurable** : Pilotage via un fichier `config.yaml`.
 - 📊 **Rapport ROI** : Calcule en temps réel l'économie réalisée.
 - 📂 **Multi-Source** : Lit depuis un fichier ou en direct via `stdin`.
+- 🚨 **Alertes Webhook** : Notifications Discord/Slack en cas d'erreur critique.
 
 ## 🚀 Installation Rapide
 
@@ -62,7 +64,7 @@ alert:
 - [x] Support du masquage IPv4.
 - [x] Envoi direct vers Discord/Slack via Webhooks.
 - [x] Support du masquage IPv6.
-- [ ] Parsing JSON intelligent pour Kubernetes.
+- [x] Parsing JSON intelligent pour Kubernetes.
 
 ---
 Projet créé dans le cadre d'un apprentissage Rust orienté **DevOps & Infrastructure**.
