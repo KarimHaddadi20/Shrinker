@@ -2,6 +2,7 @@ use clap::Parser;
 use colored::*;
 use regex::Regex;
 use serde::Deserialize;
+use serde_json::Value;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Write};
 use std::time::Instant;
@@ -163,7 +164,7 @@ fn process_logs(reader: Box<dyn BufRead>, config: &Config, ipv4_regex: &Regex, i
         if line.trim().is_empty() { continue; }
         stats.total += 1;
 
-        let mut processed = clean_timestamp(&line);
+        let mut processed = extract_message(&line);
         if config.mask_ips {
             processed = ipv4_regex.replace_all(&processed, "[MASKED_IPv4]").to_string();
             processed = ipv6_regex.replace_all(&processed, "[MASKED_IPv6]").to_string();
@@ -230,11 +231,34 @@ fn check_alert(msg: &str, count: u32, config: &Config, silent_mode: bool) {
     }
 }
 
-fn clean_timestamp(line: &str) -> String {
-    if let Some(pos) = line.find(']') {
-        line[pos + 1..].trim().to_string()
+fn extract_message(line: &str) -> String {
+    let trimmed = line.trim();
+
+    // Si la ligne commence par '{', on tente un parsing JSON
+    if trimmed.starts_with('{') {
+        if let Ok(json) = serde_json::from_str::<Value>(trimmed) {
+            // On cherche le champ "message" ou "msg" (les deux standards les plus courants)
+            let msg = json.get("message")
+                .or_else(|| json.get("msg"))
+                .and_then(|v| v.as_str());
+
+            let level = json.get("level")
+                .and_then(|v| v.as_str());
+
+            if let Some(m) = msg {
+                return match level {
+                    Some(l) => format!("[{}] {}", l.to_uppercase(), m),
+                    None => m.to_string(),
+                };
+            }
+        }
+    }
+
+    // Sinon, on utilise le nettoyage classique (suppression du timestamp entre crochets)
+    if let Some(pos) = trimmed.find(']') {
+        trimmed[pos + 1..].trim().to_string()
     } else {
-        line.trim().to_string()
+        trimmed.to_string()
     }
 }
 
