@@ -60,11 +60,41 @@ alert:
   threshold: 50 # Déclenche une alerte si le message se répète 50 fois
 ```
 
+## 🤖 Déploiement Ansible
+
+Shrinker est installable automatiquement via un **rôle Ansible universel** (Debian/Ubuntu, RHEL/CentOS/Fedora, Arch Linux).
+
+Le rôle est disponible dans un dépôt séparé :
+
+**[shrinker_role_ansible](https://github.com/KarimHaddadi20/shrinker_role_ansible)**
+
+### Installation rapide
+
+```bash
+git clone https://github.com/KarimHaddadi20/shrinker_role_ansible.git
+```
+
+```yaml
+# playbook.yml
+- name: Deployer Shrinker
+  hosts: all
+  become: yes
+  roles:
+    - shrinker_role_ansible
+```
+
+```bash
+ansible-playbook -i inventory.ini playbook.yml
+```
+
+Consultez le [README du rôle](https://github.com/KarimHaddadi20/shrinker_role_ansible#readme) pour la documentation complète (variables, exemples, distributions supportées).
+
 ## 📈 RoadMap
 - [x] Support du masquage IPv4.
 - [x] Envoi direct vers Discord/Slack via Webhooks.
 - [x] Support du masquage IPv6.
 - [x] Parsing JSON intelligent pour Kubernetes.
+- [x] Déploiement automatisé via Ansible.
 
 ---
 Projet créé dans le cadre d'un apprentissage Rust orienté **DevOps & Infrastructure**.
