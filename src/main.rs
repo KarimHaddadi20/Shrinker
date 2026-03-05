@@ -355,11 +355,12 @@ fn check_alert(msg: &str, count: u32, config: &Config, silent_mode: bool) {
                 eprintln!("{} {} (x{})", "ENVOI ALERTE :".red().bold(), msg, count);
             }
 
-            let safe_msg = msg.replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "");
-            let json_body = format!(
-                r#"{{"content": "**ALERTE CRITIQUE**\nMessage repete **{} fois**\n`{}`"}}"#,
-                count, safe_msg
+            let content = format!(
+                "**ALERTE CRITIQUE**\nMessage repete **{} fois**\n`{}`",
+                count, msg
             );
+            let payload = serde_json::json!({ "content": content });
+            let json_body = payload.to_string();
 
             let _ = Command::new("curl")
                 .arg("-X").arg("POST")
