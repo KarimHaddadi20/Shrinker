@@ -1,101 +1,134 @@
-# 🚀 Telemetry Shrinker Agent
+# Telemetry Shrinker Agent
 
-**Telemetry Shrinker** est un agent de télémétrie ultra-léger écrit en **Rust**, conçu pour réduire drastiquement les coûts de stockage et de transfert de logs dans le Cloud (AWS, Azure, Google Cloud).
+**Telemetry Shrinker** est un agent de telemetrie ultra-leger ecrit en **Rust**, concu pour reduire drastiquement les couts de stockage et de transfert de logs dans le Cloud (AWS, Azure, Google Cloud).
 
-Il est particulièrement adapté pour tourner sur des infrastructures à ressources limitées comme le **Raspberry Pi** ou dans des environnements **Kubernetes**.
+Il est particulierement adapte pour tourner sur des infrastructures a ressources limitees comme le **Raspberry Pi** ou dans des environnements **Kubernetes**.
 
-## 💡 Pourquoi utiliser Shrinker ?
+## Pourquoi utiliser Shrinker ?
 
-Dans une infrastructure moderne, 70% des logs sont du "bruit" (répétitions, messages de succès inutiles). Les fournisseurs Cloud facturent au volume.
+Dans une infrastructure moderne, 70% des logs sont du "bruit" (repetitions, messages de succes inutiles). Les fournisseurs Cloud facturent au volume.
 Shrinker permet de :
-- **Réduire le volume de logs** de 60% à 90% via un dédoublonnage intelligent.
-- **Sécuriser les données** en masquant automatiquement les adresses IP (Anonymisation).
-- **Économiser de l'argent** en ne transmettant que les informations critiques.
+- **Reduire le volume de logs** de 60% a 90% via un dedoublonnage intelligent.
+- **Securiser les donnees** en masquant automatiquement les adresses IP (IPv4 et IPv6).
+- **Parser les logs JSON** (Kubernetes, Docker) automatiquement.
+- **Alerter en temps reel** via Webhook (Discord/Slack) en cas d'erreur critique.
+- **Economiser de l'argent** en ne transmettant que les informations critiques.
 
-## ✨ Fonctionnalités
+## Fonctionnalites
 
-- 🦀 **Performance Rust** : Consommation CPU/RAM proche de zéro.
-- 🛡️ **Security First** : Masquage automatique des adresses IPv4 et IPv6.
-- 🔍 **JSON Intelligent** : Parsing automatique des logs JSON (Kubernetes, Docker, etc.).
-- ⚙️ **Configurable** : Pilotage via un fichier `config.yaml`.
-- 📊 **Rapport ROI** : Calcule en temps réel l'économie réalisée.
-- 📂 **Multi-Source** : Lit depuis un fichier ou en direct via `stdin`.
-- 🚨 **Alertes Webhook** : Notifications Discord/Slack en cas d'erreur critique.
+| Fonctionnalite | Description |
+|----------------|-------------|
+| Deduplication intelligente | Regroupe les messages repetes avec un compteur `[x6]` |
+| Masquage IPv4/IPv6 | Remplace les IPs par `[MASKED_IPv4]` / `[MASKED_IPv6]` |
+| Parsing JSON | Extrait `msg`/`message` + `level` des logs JSON (Kubernetes, Docker) |
+| Alertes Webhook | Envoie une notification Discord/Slack si un message depasse un seuil |
+| Mode verbose | Affiche chaque ligne traitee et les raisons de filtrage |
+| Mode quiet | Aucune sortie sauf les logs traites |
+| Dry-run | Simule le traitement sans ecrire |
+| `shrinker init` | Genere un `config.yaml` commente et pret a l'emploi |
 
-## 🚀 Installation Rapide
+## Installation
 
-### Pré-requis
-- Rust & Cargo installés (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
+### Pre-requis
+- Rust & Cargo installes (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
 
 ### Construction
 ```bash
-git clone https://github.com/votre-utilisateur/shrinker-rust.git
-cd shrinker-rust
+git clone https://github.com/KarimHaddadi20/Shrinker.git
+cd Shrinker
 cargo build --release
 ```
 
-## 🛠️ Utilisation
+## Demarrage rapide
 
-### Mode Agent (Temps réel)
 ```bash
-# Redirige la sortie vers un autre fichier ou un pipe
-tail -f /var/log/syslog | ./target/release/shrinker > logs_propres.log
+# Generer la configuration
+shrinker init
+
+# Analyser un fichier de logs
+shrinker --file production.log
+
+# Mode temps reel (pipe Unix)
+tail -f /var/log/syslog | shrinker > clean.log
+
+# Mode verbose (debug)
+shrinker --file app.log --verbose
+
+# Mode silencieux (production)
+shrinker --file app.log --quiet
+
+# Surcharger le seuil
+shrinker --file app.log --threshold 10
+
+# Desactiver le masquage IP
+shrinker --file app.log --no-mask-ips
+
+# Simulation (rien n'est ecrit)
+shrinker --file app.log --dry-run
 ```
 
-### Analyse de fichier
-```bash
-./target/release/shrinker --file production.log
-```
-
-## ⚙️ Configuration (`config.yaml`)
+## Configuration (`config.yaml`)
 
 ```yaml
-mask_ips: true      # Masquer les adresses IP pour la sécurité
-threshold: 5        # Ne logger que si le message se répète 5 fois
-output_file: null   # null = Sortie Standard (stdout), ou mettre "out.log" pour un fichier
+# Masquer les adresses IP (IPv4 et IPv6)
+mask_ips: true
 
-# Section Alertes (Optionnel)
+# Seuil de deduplication : conserver uniquement si le message se repete N fois
+threshold: 5
+
+# Fichier de sortie (null = stdout, ideal pour les pipes Unix)
+output_file: null
+
+# Alertes Webhook (optionnel)
 alert:
-  webhook_url: "https://discord.com/api/webhooks/..." # URL de votre Webhook
-  threshold: 50 # Déclenche une alerte si le message se répète 50 fois
+  webhook_url: "https://discord.com/api/webhooks/VOTRE_ID/VOTRE_TOKEN"
+  threshold: 50
 ```
 
-## 🤖 Déploiement Ansible
+Generez un fichier de configuration avec `shrinker init`.
 
-Shrinker est installable automatiquement via un **rôle Ansible universel** (Debian/Ubuntu, RHEL/CentOS/Fedora, Arch Linux).
+## Options CLI
 
-Le rôle est disponible dans un dépôt séparé :
+```
+Usage: shrinker [OPTIONS] [COMMAND]
 
-**[shrinker_role_ansible](https://github.com/KarimHaddadi20/shrinker_role_ansible)**
+Commands:
+  init   Genere un fichier config.yaml par defaut
 
-### Installation rapide
+Options:
+  -f, --file <FILE>           Fichier de log a analyser (stdin si omis)
+  -c, --config <CONFIG>       Fichier de configuration YAML [default: config.yaml]
+  -t, --threshold <THRESHOLD> Surcharge le seuil du config.yaml
+      --no-mask-ips           Desactiver le masquage IP
+      --dry-run               Simulation sans ecriture
+  -v, --verbose               Affiche chaque ligne traitee
+  -q, --quiet                 N'affiche que les erreurs critiques
+  -h, --help                  Aide
+  -V, --version               Version
+```
+
+## Deploiement Ansible
+
+Shrinker est installable automatiquement via un **role Ansible universel** (Debian/Ubuntu, RHEL/CentOS/Fedora, Arch Linux).
+
+Le role est disponible dans un depot separe : **[shrinker_role_ansible](https://github.com/KarimHaddadi20/shrinker_role_ansible)**
 
 ```bash
 git clone https://github.com/KarimHaddadi20/shrinker_role_ansible.git
-```
-
-```yaml
-# playbook.yml
-- name: Deployer Shrinker
-  hosts: all
-  become: yes
-  roles:
-    - shrinker_role_ansible
-```
-
-```bash
 ansible-playbook -i inventory.ini playbook.yml
 ```
 
-Consultez le [README du rôle](https://github.com/KarimHaddadi20/shrinker_role_ansible#readme) pour la documentation complète (variables, exemples, distributions supportées).
+Consultez le [README du role](https://github.com/KarimHaddadi20/shrinker_role_ansible#readme) pour la documentation complete.
 
-## 📈 RoadMap
-- [x] Support du masquage IPv4.
-- [x] Envoi direct vers Discord/Slack via Webhooks.
-- [x] Support du masquage IPv6.
-- [x] Parsing JSON intelligent pour Kubernetes.
-- [x] Déploiement automatisé via Ansible.
+## RoadMap
+- [x] Deduplication intelligente des logs.
+- [x] Masquage IPv4 et IPv6.
+- [x] Alertes Webhook (Discord/Slack).
+- [x] Parsing JSON intelligent (Kubernetes, Docker).
+- [x] Deploiement automatise via Ansible.
+- [x] CLI documentee avec `--help`, `--verbose`, `--quiet`, `--dry-run`.
+- [x] Commande `shrinker init` pour generer la configuration.
+- [x] Gestion d'erreurs conviviale (messages clairs, pas de panic).
 
 ---
-Projet créé dans le cadre d'un apprentissage Rust orienté **DevOps & Infrastructure**.
-
+Projet cree dans le cadre d'un apprentissage Rust oriente **DevOps & Infrastructure**.
