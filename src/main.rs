@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use colored::*;
 use regex::Regex;
 use serde::Deserialize;
@@ -7,9 +7,8 @@ use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Write};
 use std::time::Instant;
 use chrono::Local;
-use std::process::Command;
+use std::process::{self, Command};
 
-// Structure pour le fichier de configuration YAML
 #[derive(Deserialize, Debug)]
 struct Config {
     mask_ips: bool,
@@ -32,12 +31,16 @@ struct AlertConfig {
     long_about = "Shrinker reduit le volume de logs via deduplication intelligente et masquage IP (IPv4/IPv6).\n\
                   Il peut envoyer des alertes Webhook (Discord/Slack) en cas d'erreur critique repetee.\n\n\
                   EXEMPLES:\n\
-                  \n  Analyser un fichier de logs:\n    shrinker --file production.log\
-                  \n\n  Mode temps reel (pipe Unix):\n    tail -f /var/log/syslog | shrinker > clean.log\
-                  \n\n  Surcharger le seuil de deduplication:\n    shrinker --file app.log --threshold 10\
-                  \n\n  Desactiver le masquage IP:\n    shrinker --file app.log --no-mask-ips",
+                  \n  Generer un fichier de configuration:\n    shrinker init\
+                  \n\n  Analyser un fichier de logs:\n    shrinker run --file production.log\
+                  \n\n  Mode temps reel (pipe Unix):\n    tail -f /var/log/syslog | shrinker run > clean.log\
+                  \n\n  Mode verbose:\n    shrinker run --file app.log --verbose\
+                  \n\n  Mode silencieux:\n    shrinker run --file app.log --quiet",
 )]
-struct Args {
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+
     /// Fichier de log a analyser (stdin si omis)
     #[arg(short, long)]
     file: Option<String>,
@@ -57,32 +60,138 @@ struct Args {
     /// Mode simulation : affiche ce qui serait fait sans rien ecrire
     #[arg(long)]
     dry_run: bool,
+
+    /// Mode verbose : affiche chaque ligne traitee
+    #[arg(short, long)]
+    verbose: bool,
+
+    /// Mode silencieux : n'affiche que les erreurs critiques
+    #[arg(short, long)]
+    quiet: bool,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Genere un fichier config.yaml par defaut dans le repertoire courant
+    Init {
+        /// Chemin du fichier de configuration a generer
+        #[arg(short, long, default_value = "config.yaml")]
+        output: String,
+    },
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Verbosity {
+    Quiet,
+    Normal,
+    Verbose,
 }
 
 struct Stats {
     total: u64,
     sent: u64,
+    skipped: u64,
     start_time: Instant,
 }
 
+fn exit_error(msg: &str) -> ! {
+    eprintln!("{} {}", "erreur:".red().bold(), msg);
+    process::exit(1);
+}
+
+fn generate_default_config(path: &str) {
+    if fs::metadata(path).is_ok() {
+        exit_error(&format!("le fichier '{}' existe deja (utilisez un autre nom avec --output)", path));
+    }
+
+    let default_config = r#"# Configuration Shrinker
+# Documentation : https://github.com/KarimHaddadi20/Shrinker
+
+# Masquer les adresses IP (IPv4 et IPv6) dans les logs
+mask_ips: true
+
+# Seuil de deduplication : un message doit se repeter N fois pour etre conserve
+threshold: 5
+
+# Fichier de sortie (null = stdout, ideal pour les pipes Unix)
+output_file: null
+
+# Alertes Webhook (optionnel, decommentez pour activer)
+# alert:
+#   webhook_url: "https://discord.com/api/webhooks/VOTRE_ID/VOTRE_TOKEN"
+#   threshold: 50
+"#;
+
+    if let Err(e) = fs::write(path, default_config) {
+        exit_error(&format!("impossible de creer '{}': {}", path, e));
+    }
+
+    eprintln!("{} Configuration generee dans '{}'", "ok:".green().bold(), path);
+    eprintln!("   Editez ce fichier puis lancez : shrinker --file vos_logs.txt");
+}
+
+fn load_config(path: &str) -> Config {
+    let config_str = match fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            if e.kind() == io::ErrorKind::NotFound {
+                exit_error(&format!(
+                    "fichier '{}' introuvable\n   Lancez 'shrinker init' pour en generer un",
+                    path
+                ));
+            }
+            exit_error(&format!("impossible de lire '{}': {}", path, e));
+        }
+    };
+
+    match serde_yaml::from_str::<Config>(&config_str) {
+        Ok(c) => c,
+        Err(e) => {
+            let hint = if e.to_string().contains("missing field") {
+                let field = e.to_string();
+                format!("\n   Verifiez que le champ manquant est bien present dans '{}'", path)
+                    + &format!("\n   Detail : {}", field)
+            } else {
+                format!("\n   Detail : {}", e)
+            };
+            exit_error(&format!("format YAML invalide dans '{}'{}", path, hint));
+        }
+    }
+}
+
 fn main() {
-    let args = Args::parse();
+    let cli = Cli::parse();
+
+    if let Some(Commands::Init { output }) = &cli.command {
+        generate_default_config(output);
+        return;
+    }
+
+    if cli.verbose && cli.quiet {
+        exit_error("--verbose et --quiet ne peuvent pas etre utilises ensemble");
+    }
+
+    let verbosity = if cli.quiet {
+        Verbosity::Quiet
+    } else if cli.verbose {
+        Verbosity::Verbose
+    } else {
+        Verbosity::Normal
+    };
+
     let mut stats = Stats {
         total: 0,
         sent: 0,
+        skipped: 0,
         start_time: Instant::now(),
     };
 
-    // 1. Chargement de la configuration (YAML + surcharges CLI)
-    let config_str = fs::read_to_string(&args.config)
-        .expect("❌ Impossible de lire le fichier de configuration");
-    let mut config: Config = serde_yaml::from_str(&config_str)
-        .expect("❌ Erreur de format dans le fichier YAML");
+    let mut config = load_config(&cli.config);
 
-    if let Some(t) = args.threshold {
+    if let Some(t) = cli.threshold {
         config.threshold = t;
     }
-    if args.no_mask_ips {
+    if cli.no_mask_ips {
         config.mask_ips = false;
     }
 
@@ -91,69 +200,88 @@ fn main() {
         r"(?i)[0-9a-f]{1,4}(:[0-9a-f]{1,4}){7}|([0-9a-f]{1,4}:)+:([0-9a-f]{1,4}:)*[0-9a-f]{1,4}|([0-9a-f]{1,4}:)+:|::[0-9a-f]{1,4}(:[0-9a-f]{1,4})*|::"
     ).unwrap();
 
-    // Détermine si on est en mode fichier ou stdout
     let is_stdout_mode = match &config.output_file {
         Some(f) => f.is_empty(),
         None => true,
     };
 
-    // Si on écrit dans un fichier, on peut afficher les infos dans le terminal
-    if !is_stdout_mode {
+    if !is_stdout_mode && verbosity != Verbosity::Quiet {
         eprintln!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".bright_cyan());
-        eprintln!("{} {}", "🚀 AGENT SHRINKER V1.2 - CONFIG CHARGÉE".bright_cyan(), Local::now().format("%H:%M:%S").to_string().yellow());
-        
+        eprintln!("{} {}", "AGENT SHRINKER V1.3 - CONFIG CHARGEE".bright_cyan(), Local::now().format("%H:%M:%S").to_string().yellow());
+
         let output_target = config.output_file.as_ref().unwrap();
-        eprintln!("📂 Sortie : {}", output_target.bright_magenta());
-        eprintln!("🛡️  Sécurité IP : {}", if config.mask_ips { "ACTIVE".green() } else { "INACTIVE".red() });
-        
+        eprintln!("   Sortie : {}", output_target.bright_magenta());
+        eprintln!("   Securite IP : {}", if config.mask_ips { "ACTIVE".green() } else { "INACTIVE".red() });
+        eprintln!("   Seuil : {}", config.threshold.to_string().yellow());
+
         if let Some(alert) = &config.alert {
-            eprintln!("🚨 Alertes : ACTIVE (Seuil: {})", alert.threshold.to_string().red().bold());
+            eprintln!("   Alertes : ACTIVE (Seuil: {})", alert.threshold.to_string().red().bold());
+        }
+
+        if verbosity == Verbosity::Verbose {
+            eprintln!("   Mode : {}", "VERBOSE".bright_yellow().bold());
         }
 
         eprintln!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".bright_cyan());
     }
 
-    // 2. Préparation de la sortie
     let mut output: Box<dyn Write> = if is_stdout_mode {
         Box::new(io::stdout())
     } else {
         let path = config.output_file.as_ref().unwrap();
-        let f = File::create(path).expect("❌ Impossible de créer le fichier de sortie");
-        Box::new(f)
+        match File::create(path) {
+            Ok(f) => Box::new(f),
+            Err(e) => exit_error(&format!("impossible de creer le fichier de sortie '{}': {}", path, e)),
+        }
     };
 
-    // 3. Sélection de la source
-    let input: Box<dyn BufRead> = match args.file {
+    let input: Box<dyn BufRead> = match cli.file {
         Some(ref path) => {
-            let f = File::open(path).expect("❌ Impossible d'ouvrir le fichier source");
-            Box::new(BufReader::new(f))
+            match File::open(path) {
+                Ok(f) => Box::new(BufReader::new(f)),
+                Err(e) => {
+                    if e.kind() == io::ErrorKind::NotFound {
+                        exit_error(&format!("fichier '{}' introuvable", path));
+                    }
+                    exit_error(&format!("impossible d'ouvrir '{}': {}", path, e));
+                }
+            }
         }
         None => Box::new(BufReader::new(io::stdin())),
     };
 
-    // 4. Traitement
-    if args.dry_run {
+    if cli.dry_run && verbosity != Verbosity::Quiet {
         eprintln!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".bright_cyan());
-        eprintln!("{}", "🧪 MODE DRY-RUN (Simulation, aucune ecriture)".bright_yellow().bold());
-        eprintln!("📂 Source : {}", args.file.as_deref().unwrap_or("stdin"));
-        eprintln!("🛡️  Masquage IP : {}", if config.mask_ips { "ACTIVE" } else { "INACTIVE" });
-        eprintln!("📊 Seuil : {}", config.threshold);
+        eprintln!("{}", "MODE DRY-RUN (Simulation, aucune ecriture)".bright_yellow().bold());
+        eprintln!("   Source : {}", cli.file.as_deref().unwrap_or("stdin"));
+        eprintln!("   Masquage IP : {}", if config.mask_ips { "ACTIVE" } else { "INACTIVE" });
+        eprintln!("   Seuil : {}", config.threshold);
         if let Some(alert) = &config.alert {
-            eprintln!("🚨 Alertes : Seuil {}", alert.threshold);
+            eprintln!("   Alertes : Seuil {}", alert.threshold);
         }
         eprintln!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".bright_cyan());
     }
 
-    process_logs(input, &config, &ipv4_regex, &ipv6_regex, &mut stats, &mut output, is_stdout_mode, args.dry_run);
+    process_logs(input, &config, &ipv4_regex, &ipv6_regex, &mut stats, &mut output, is_stdout_mode, cli.dry_run, verbosity);
 
-    if !is_stdout_mode || args.dry_run {
+    if (!is_stdout_mode || cli.dry_run) && verbosity != Verbosity::Quiet {
         display_final_report(&stats);
     }
 }
 
-fn process_logs(reader: Box<dyn BufRead>, config: &Config, ipv4_regex: &Regex, ipv6_regex: &Regex, stats: &mut Stats, output: &mut Box<dyn Write>, silent_mode: bool, dry_run: bool) {
+fn process_logs(
+    reader: Box<dyn BufRead>,
+    config: &Config,
+    ipv4_regex: &Regex,
+    ipv6_regex: &Regex,
+    stats: &mut Stats,
+    output: &mut Box<dyn Write>,
+    silent_mode: bool,
+    dry_run: bool,
+    verbosity: Verbosity,
+) {
     let mut last_msg = String::new();
-    let mut count = 0;
+    let mut count: u32 = 0;
 
     for line_res in reader.lines() {
         let line = match line_res {
@@ -163,6 +291,10 @@ fn process_logs(reader: Box<dyn BufRead>, config: &Config, ipv4_regex: &Regex, i
 
         if line.trim().is_empty() { continue; }
         stats.total += 1;
+
+        if verbosity == Verbosity::Verbose && !silent_mode {
+            eprintln!("  {} {}", format!("#{}", stats.total).dimmed(), line.dimmed());
+        }
 
         let mut processed = extract_message(&line);
         if config.mask_ips {
@@ -180,10 +312,15 @@ fn process_logs(reader: Box<dyn BufRead>, config: &Config, ipv4_regex: &Regex, i
                 if count >= config.threshold {
                     if !dry_run {
                         print_log(count, &last_msg, output, silent_mode);
-                    } else {
+                    } else if verbosity != Verbosity::Quiet {
                         eprintln!("  {} [x{}] {}", ">>".bright_yellow(), count, last_msg);
                     }
                     stats.sent += 1;
+                } else {
+                    stats.skipped += 1;
+                    if verbosity == Verbosity::Verbose && !silent_mode {
+                        eprintln!("  {} [x{}] {} {}", "skip".dimmed(), count, last_msg.dimmed(), format!("(< seuil {})", config.threshold).dimmed());
+                    }
                 }
             }
             last_msg = processed;
@@ -198,10 +335,15 @@ fn process_logs(reader: Box<dyn BufRead>, config: &Config, ipv4_regex: &Regex, i
         if count >= config.threshold {
             if !dry_run {
                 print_log(count, &last_msg, output, silent_mode);
-            } else {
+            } else if verbosity != Verbosity::Quiet {
                 eprintln!("  {} [x{}] {}", ">>".bright_yellow(), count, last_msg);
             }
             stats.sent += 1;
+        } else {
+            stats.skipped += 1;
+            if verbosity == Verbosity::Verbose && !silent_mode {
+                eprintln!("  {} [x{}] {} {}", "skip".dimmed(), count, last_msg.dimmed(), format!("(< seuil {})", config.threshold).dimmed());
+            }
         }
     }
 }
@@ -210,21 +352,21 @@ fn check_alert(msg: &str, count: u32, config: &Config, silent_mode: bool) {
     if let Some(alert) = &config.alert {
         if count >= alert.threshold {
             if !silent_mode {
-                eprintln!("{} {} (x{})", "🚨 ENVOI ALERTE :".red().bold(), msg, count);
+                eprintln!("{} {} (x{})", "ENVOI ALERTE :".red().bold(), msg, count);
             }
-            
-            // Construction manuelle du JSON
-            // On échappe les caractères spéciaux basiques
-            let safe_msg = msg.replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "");
-            let json_body = format!(r#"{{"content": "🚨 **ALERTE CRITIQUE**\nMessage répété **{} fois**\n`{}`"}}"#, count, safe_msg);
 
-            // On lance curl en arrière-plan (spawn) pour ne pas bloquer le traitement des logs
+            let safe_msg = msg.replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "");
+            let json_body = format!(
+                r#"{{"content": "**ALERTE CRITIQUE**\nMessage repete **{} fois**\n`{}`"}}"#,
+                count, safe_msg
+            );
+
             let _ = Command::new("curl")
                 .arg("-X").arg("POST")
                 .arg("-H").arg("Content-Type: application/json")
                 .arg("-d").arg(&json_body)
                 .arg(&alert.webhook_url)
-                .stdout(std::process::Stdio::null()) // Mode silencieux
+                .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .spawn();
         }
@@ -234,10 +376,8 @@ fn check_alert(msg: &str, count: u32, config: &Config, silent_mode: bool) {
 fn extract_message(line: &str) -> String {
     let trimmed = line.trim();
 
-    // Si la ligne commence par '{', on tente un parsing JSON
     if trimmed.starts_with('{') {
         if let Ok(json) = serde_json::from_str::<Value>(trimmed) {
-            // On cherche le champ "message" ou "msg" (les deux standards les plus courants)
             let msg = json.get("message")
                 .or_else(|| json.get("msg"))
                 .and_then(|v| v.as_str());
@@ -254,7 +394,6 @@ fn extract_message(line: &str) -> String {
         }
     }
 
-    // Sinon, on utilise le nettoyage classique (suppression du timestamp entre crochets)
     if let Some(pos) = trimmed.find(']') {
         trimmed[pos + 1..].trim().to_string()
     } else {
@@ -263,7 +402,6 @@ fn extract_message(line: &str) -> String {
 }
 
 fn print_log(count: u32, msg: &str, output: &mut Box<dyn Write>, silent_mode: bool) {
-    // En mode fichier, on affiche un feedback visuel dans le terminal
     if !silent_mode {
         if count > 1 {
             eprintln!("  {} {}", format!("[x{}]", count).bright_yellow().bold(), msg);
@@ -272,26 +410,30 @@ fn print_log(count: u32, msg: &str, output: &mut Box<dyn Write>, silent_mode: bo
         }
     }
 
-    // Écriture réelle (Fichier ou Stdout)
-    // En mode stdout, on n'ajoute pas de couleurs ANSI dans le flux de données
     let log_line = if count > 1 {
         format!("[x{}] {}\n", count, msg)
     } else {
         format!("[+] {}\n", msg)
     };
-    
-    output.write_all(log_line.as_bytes()).expect("❌ Erreur d'écriture");
+
+    output.write_all(log_line.as_bytes()).unwrap_or_else(|e| {
+        exit_error(&format!("erreur d'ecriture: {}", e));
+    });
 }
 
 fn display_final_report(stats: &Stats) {
-    if stats.total == 0 { return; }
+    if stats.total == 0 {
+        eprintln!("{}", "\nAucune ligne traitee.".dimmed());
+        return;
+    }
     let duration = stats.start_time.elapsed();
     let reduction = 100 - (stats.sent * 100 / stats.total);
-    
+
     eprintln!("{}", "\n━━━━━━━━━━━━━━━━━━━━ STATS ━━━━━━━━━━━━━━━━━━━━".bright_cyan());
-    eprintln!("⏱️  Temps : {:?}", duration);
-    eprintln!("📄 Total : {}", stats.total);
-    eprintln!("📤 Envoyé : {}", stats.sent);
-    eprintln!("💰 ÉCO : {}", format!("{}%", reduction).bright_green().bold());
+    eprintln!("   Temps    : {:?}", duration);
+    eprintln!("   Total    : {}", stats.total);
+    eprintln!("   Conserve : {}", stats.sent);
+    eprintln!("   Filtre   : {}", stats.skipped);
+    eprintln!("   Economie : {}", format!("{}%", reduction).bright_green().bold());
     eprintln!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".bright_cyan());
 }
