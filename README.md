@@ -25,6 +25,7 @@ Shrinker permet de :
 | Mode verbose | Affiche chaque ligne traitee et les raisons de filtrage |
 | Mode quiet | Aucune sortie sauf les logs traites |
 | Dry-run | Simule le traitement sans ecrire |
+| Patterns d'exclusion | Ignore les lignes contenant certains mots-cles (health check, heartbeat...) |
 | `shrinker init` | Genere un `config.yaml` commente et pret a l'emploi |
 
 ## Installation
@@ -79,6 +80,13 @@ threshold: 5
 # Fichier de sortie (null = stdout, ideal pour les pipes Unix)
 output_file: null
 
+# Patterns d'exclusion (case-insensitive)
+exclude_patterns:
+  - "health check"
+  - "heartbeat"
+  # - "DEBUG"
+  # - "keep-alive"
+
 # Alertes Webhook (optionnel)
 alert:
   webhook_url: "https://discord.com/api/webhooks/VOTRE_ID/VOTRE_TOKEN"
@@ -129,6 +137,7 @@ Consultez le [README du role](https://github.com/KarimHaddadi20/shrinker_role_an
 - [x] CLI documentee avec `--help`, `--verbose`, `--quiet`, `--dry-run`.
 - [x] Commande `shrinker init` pour generer la configuration.
 - [x] Gestion d'erreurs conviviale (messages clairs, pas de panic).
+- [x] Patterns d'exclusion configurables (health check, heartbeat, etc.).
 
 ---
 Projet cree dans le cadre d'un apprentissage Rust oriente **DevOps & Infrastructure**.

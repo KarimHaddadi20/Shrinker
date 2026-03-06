@@ -15,6 +15,8 @@ struct Config {
     threshold: u32,
     output_file: Option<String>,
     alert: Option<AlertConfig>,
+    #[serde(default)]
+    exclude_patterns: Vec<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -91,6 +93,7 @@ struct Stats {
     total: u64,
     sent: u64,
     skipped: u64,
+    excluded: u64,
     start_time: Instant,
 }
 
@@ -115,6 +118,13 @@ threshold: 5
 
 # Fichier de sortie (null = stdout, ideal pour les pipes Unix)
 output_file: null
+
+# Patterns d'exclusion : les lignes contenant ces mots seront ignorees (case-insensitive)
+exclude_patterns:
+  - "health check"
+  - "heartbeat"
+  # - "DEBUG"
+  # - "keep-alive"
 
 # Alertes Webhook (optionnel, decommentez pour activer)
 # alert:
@@ -183,6 +193,7 @@ fn main() {
         total: 0,
         sent: 0,
         skipped: 0,
+        excluded: 0,
         start_time: Instant::now(),
     };
 
@@ -213,6 +224,10 @@ fn main() {
         eprintln!("   Sortie : {}", output_target.bright_magenta());
         eprintln!("   Securite IP : {}", if config.mask_ips { "ACTIVE".green() } else { "INACTIVE".red() });
         eprintln!("   Seuil : {}", config.threshold.to_string().yellow());
+
+        if !config.exclude_patterns.is_empty() {
+            eprintln!("   Exclusions : {} pattern(s)", config.exclude_patterns.len().to_string().yellow());
+        }
 
         if let Some(alert) = &config.alert {
             eprintln!("   Alertes : ACTIVE (Seuil: {})", alert.threshold.to_string().red().bold());
@@ -256,6 +271,9 @@ fn main() {
         eprintln!("   Source : {}", cli.file.as_deref().unwrap_or("stdin"));
         eprintln!("   Masquage IP : {}", if config.mask_ips { "ACTIVE" } else { "INACTIVE" });
         eprintln!("   Seuil : {}", config.threshold);
+        if !config.exclude_patterns.is_empty() {
+            eprintln!("   Exclusions : {:?}", config.exclude_patterns);
+        }
         if let Some(alert) = &config.alert {
             eprintln!("   Alertes : Seuil {}", alert.threshold);
         }
@@ -300,6 +318,15 @@ fn process_logs(
         if config.mask_ips {
             processed = ipv4_regex.replace_all(&processed, "[MASKED_IPv4]").to_string();
             processed = ipv6_regex.replace_all(&processed, "[MASKED_IPv6]").to_string();
+        }
+
+        let lower = processed.to_lowercase();
+        if config.exclude_patterns.iter().any(|p| lower.contains(&p.to_lowercase())) {
+            stats.excluded += 1;
+            if verbosity == Verbosity::Verbose && !silent_mode {
+                eprintln!("  {} {}", "exclu".dimmed(), processed.dimmed());
+            }
+            continue;
         }
 
         if processed == last_msg {
@@ -435,6 +462,9 @@ fn display_final_report(stats: &Stats) {
     eprintln!("   Total    : {}", stats.total);
     eprintln!("   Conserve : {}", stats.sent);
     eprintln!("   Filtre   : {}", stats.skipped);
+    if stats.excluded > 0 {
+        eprintln!("   Exclu    : {}", stats.excluded.to_string().yellow());
+    }
     eprintln!("   Economie : {}", format!("{}%", reduction).bright_green().bold());
     eprintln!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".bright_cyan());
 }
