@@ -26,6 +26,8 @@ Shrinker permet de :
 | Mode quiet | Aucune sortie sauf les logs traites |
 | Dry-run | Simule le traitement sans ecrire |
 | Patterns d'exclusion | Ignore les lignes contenant certains mots-cles (health check, heartbeat...) |
+| Sortie JSON | `--output-format json` pour chaîner avec jq, Elasticsearch, Loki |
+| Webhook via env | `webhook_url: "$DISCORD_WEBHOOK"` pour eviter les secrets en clair |
 | `shrinker init` | Genere un `config.yaml` commente et pret a l'emploi |
 
 ## Installation
@@ -66,7 +68,13 @@ shrinker --file app.log --no-mask-ips
 
 # Simulation (rien n'est ecrit)
 shrinker --file app.log --dry-run
+
+# Sortie JSON (compatible jq, Elasticsearch, Loki)
+shrinker --file app.log --output-format json
+tail -f syslog | shrinker --output-format json | jq .
 ```
+
+Format JSON (une ligne par entree, JSONL) : `{"count": 5, "message": "...", "timestamp": "2026-03-07T10:00:00.000Z"}`
 
 ## Configuration (`config.yaml`)
 
@@ -88,8 +96,9 @@ exclude_patterns:
   # - "keep-alive"
 
 # Alertes Webhook (optionnel)
+# webhook_url accepte une URL ou une variable d'environnement : $DISCORD_WEBHOOK
 alert:
-  webhook_url: "https://discord.com/api/webhooks/VOTRE_ID/VOTRE_TOKEN"
+  webhook_url: "$DISCORD_WEBHOOK"   # ou URL en clair
   threshold: 50
 ```
 
@@ -111,6 +120,7 @@ Options:
       --dry-run               Simulation sans ecriture
   -v, --verbose               Affiche chaque ligne traitee
   -q, --quiet                 N'affiche que les erreurs critiques
+      --output-format <FMT>   Format de sortie : text (defaut) ou json
   -h, --help                  Aide
   -V, --version               Version
 ```
@@ -138,6 +148,8 @@ Consultez le [README du role](https://github.com/KarimHaddadi20/shrinker_role_an
 - [x] Commande `shrinker init` pour generer la configuration.
 - [x] Gestion d'erreurs conviviale (messages clairs, pas de panic).
 - [x] Patterns d'exclusion configurables (health check, heartbeat, etc.).
+- [x] Sortie JSON (`--output-format json`) pour interoperabilite.
+- [x] Webhook via variable d'environnement (securite des secrets).
 
 ---
 Projet cree dans le cadre d'un apprentissage Rust oriente **DevOps & Infrastructure**.

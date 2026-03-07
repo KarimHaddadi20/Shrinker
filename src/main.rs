@@ -6,8 +6,9 @@ use serde_json::Value;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Write};
 use std::time::Instant;
-use chrono::Local;
+use chrono::{Local, Utc};
 use std::process::{self, Command};
+use std::env;
 
 #[derive(Deserialize, Debug)]
 struct Config {
@@ -70,6 +71,10 @@ struct Cli {
     /// Mode silencieux : n'affiche que les erreurs critiques
     #[arg(short, long)]
     quiet: bool,
+
+    /// Format de sortie : text (defaut) ou json (une ligne JSON par entree, compatible jq/Elasticsearch)
+    #[arg(long, default_value = "text")]
+    output_format: String,
 }
 
 #[derive(Subcommand, Debug)]
@@ -127,8 +132,9 @@ exclude_patterns:
   # - "keep-alive"
 
 # Alertes Webhook (optionnel, decommentez pour activer)
+# webhook_url accepte une URL ou une variable d'environnement : $DISCORD_WEBHOOK ou ${DISCORD_WEBHOOK}
 # alert:
-#   webhook_url: "https://discord.com/api/webhooks/VOTRE_ID/VOTRE_TOKEN"
+#   webhook_url: "$DISCORD_WEBHOOK"
 #   threshold: 50
 "#;
 
@@ -138,6 +144,21 @@ exclude_patterns:
 
     eprintln!("{} Configuration generee dans '{}'", "ok:".green().bold(), path);
     eprintln!("   Editez ce fichier puis lancez : shrinker --file vos_logs.txt");
+}
+
+fn resolve_env_var(s: &str) -> Option<String> {
+    let s = s.trim();
+    if s.starts_with("${") {
+        if let Some(end) = s.find('}') {
+            let var_name = &s[2..end];
+            return env::var(var_name).ok();
+        }
+    }
+    if s.starts_with('$') {
+        let var_name = s[1..].split_whitespace().next().unwrap_or(&s[1..]);
+        return env::var(var_name).ok();
+    }
+    None
 }
 
 fn load_config(path: &str) -> Config {
@@ -181,6 +202,8 @@ fn main() {
         exit_error("--verbose et --quiet ne peuvent pas etre utilises ensemble");
     }
 
+    let output_format_json = matches!(cli.output_format.to_lowercase().as_str(), "json" | "j");
+
     let verbosity = if cli.quiet {
         Verbosity::Quiet
     } else if cli.verbose {
@@ -198,6 +221,22 @@ fn main() {
     };
 
     let mut config = load_config(&cli.config);
+
+    if let Some(ref mut alert) = config.alert {
+        if let Some(resolved) = resolve_env_var(&alert.webhook_url) {
+            alert.webhook_url = resolved;
+        } else if alert.webhook_url.starts_with('$') {
+            let var_hint = if alert.webhook_url.starts_with("${") {
+                alert.webhook_url.split('}').next().map(|s| &s[2..]).unwrap_or("?")
+            } else {
+                &alert.webhook_url[1..]
+            };
+            exit_error(&format!(
+                "variable d'environnement '{}' non definie (webhook_url dans config)",
+                var_hint
+            ));
+        }
+    }
 
     if let Some(t) = cli.threshold {
         config.threshold = t;
@@ -280,7 +319,7 @@ fn main() {
         eprintln!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".bright_cyan());
     }
 
-    process_logs(input, &config, &ipv4_regex, &ipv6_regex, &mut stats, &mut output, is_stdout_mode, cli.dry_run, verbosity);
+    process_logs(input, &config, &ipv4_regex, &ipv6_regex, &mut stats, &mut output, is_stdout_mode, cli.dry_run, verbosity, output_format_json);
 
     if (!is_stdout_mode || cli.dry_run) && verbosity != Verbosity::Quiet {
         display_final_report(&stats);
@@ -297,6 +336,7 @@ fn process_logs(
     silent_mode: bool,
     dry_run: bool,
     verbosity: Verbosity,
+    output_format_json: bool,
 ) {
     let mut last_msg = String::new();
     let mut count: u32 = 0;
@@ -338,7 +378,7 @@ fn process_logs(
                 }
                 if count >= config.threshold {
                     if !dry_run {
-                        print_log(count, &last_msg, output, silent_mode);
+                        print_log(count, &last_msg, output, silent_mode, output_format_json);
                     } else if verbosity != Verbosity::Quiet {
                         eprintln!("  {} [x{}] {}", ">>".bright_yellow(), count, last_msg);
                     }
@@ -361,7 +401,7 @@ fn process_logs(
         }
         if count >= config.threshold {
             if !dry_run {
-                print_log(count, &last_msg, output, silent_mode);
+                print_log(count, &last_msg, output, silent_mode, output_format_json);
             } else if verbosity != Verbosity::Quiet {
                 eprintln!("  {} [x{}] {}", ">>".bright_yellow(), count, last_msg);
             }
@@ -429,7 +469,7 @@ fn extract_message(line: &str) -> String {
     }
 }
 
-fn print_log(count: u32, msg: &str, output: &mut Box<dyn Write>, silent_mode: bool) {
+fn print_log(count: u32, msg: &str, output: &mut Box<dyn Write>, silent_mode: bool, output_format_json: bool) {
     if !silent_mode {
         if count > 1 {
             eprintln!("  {} {}", format!("[x{}]", count).bright_yellow().bold(), msg);
@@ -438,7 +478,15 @@ fn print_log(count: u32, msg: &str, output: &mut Box<dyn Write>, silent_mode: bo
         }
     }
 
-    let log_line = if count > 1 {
+    let log_line = if output_format_json {
+        let timestamp = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+        let payload = serde_json::json!({
+            "count": count,
+            "message": msg,
+            "timestamp": timestamp
+        });
+        format!("{}\n", payload.to_string())
+    } else if count > 1 {
         format!("[x{}] {}\n", count, msg)
     } else {
         format!("[+] {}\n", msg)
