@@ -3,9 +3,10 @@ use colored::*;
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Write};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use chrono::{Local, Utc};
 use std::process::{self, Command};
 use std::env;
@@ -26,6 +27,9 @@ struct Config {
 struct AlertConfig {
     webhook_url: String,
     threshold: u32,
+    /// Délai minimum (en minutes) entre deux alertes pour le même message
+    #[serde(default)]
+    cooldown_minutes: Option<u64>,
 }
 
 #[derive(Parser, Debug)]
@@ -146,6 +150,7 @@ exclude_patterns:
 # alert:
 #   webhook_url: "$DISCORD_WEBHOOK"
 #   threshold: 50
+#   cooldown_minutes: 15   # Max 1 alerte par 15 min pour le meme message (evite le spam)
 "#;
 
     if let Err(e) = fs::write(path, default_config) {
@@ -283,7 +288,15 @@ fn main() {
         }
 
         if let Some(alert) = &config.alert {
-            eprintln!("   Alertes : ACTIVE (Seuil: {})", alert.threshold.to_string().red().bold());
+            let cooldown_info = alert
+                .cooldown_minutes
+                .map(|m| format!(", Cooldown: {} min", m))
+                .unwrap_or_default();
+            eprintln!(
+                "   Alertes : ACTIVE (Seuil: {}{})",
+                alert.threshold.to_string().red().bold(),
+                cooldown_info
+            );
         }
 
         if verbosity == Verbosity::Verbose {
@@ -331,12 +344,17 @@ fn main() {
             eprintln!("   Inclusions : {:?}", config.include_patterns);
         }
         if let Some(alert) = &config.alert {
-            eprintln!("   Alertes : Seuil {}", alert.threshold);
+            let cooldown_info = alert
+                .cooldown_minutes
+                .map(|m| format!(", Cooldown {} min", m))
+                .unwrap_or_default();
+            eprintln!("   Alertes : Seuil {}{}", alert.threshold, cooldown_info);
         }
         eprintln!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".bright_cyan());
     }
 
-    process_logs(input, &config, &ipv4_regex, &ipv6_regex, &mut stats, &mut output, is_stdout_mode, cli.dry_run, verbosity, output_format_json);
+    let mut alert_cooldown: HashMap<String, Instant> = HashMap::new();
+    process_logs(input, &config, &ipv4_regex, &ipv6_regex, &mut stats, &mut output, &mut alert_cooldown, is_stdout_mode, cli.dry_run, verbosity, output_format_json);
 
     if (!is_stdout_mode || cli.dry_run) && verbosity != Verbosity::Quiet {
         display_final_report(&stats);
@@ -350,6 +368,7 @@ fn process_logs(
     ipv6_regex: &Regex,
     stats: &mut Stats,
     output: &mut Box<dyn Write>,
+    alert_cooldown: &mut HashMap<String, Instant>,
     silent_mode: bool,
     dry_run: bool,
     verbosity: Verbosity,
@@ -401,7 +420,7 @@ fn process_logs(
         } else {
             if !last_msg.is_empty() {
                 if !dry_run {
-                    check_alert(&last_msg, count, config, silent_mode);
+                    check_alert(&last_msg, count, config, silent_mode, alert_cooldown);
                 }
                 if count >= config.threshold {
                     if !dry_run {
@@ -424,7 +443,7 @@ fn process_logs(
 
     if !last_msg.is_empty() {
         if !dry_run {
-            check_alert(&last_msg, count, config, silent_mode);
+            check_alert(&last_msg, count, config, silent_mode, alert_cooldown);
         }
         if count >= config.threshold {
             if !dry_run {
@@ -442,9 +461,33 @@ fn process_logs(
     }
 }
 
-fn check_alert(msg: &str, count: u32, config: &Config, silent_mode: bool) {
+fn check_alert(
+    msg: &str,
+    count: u32,
+    config: &Config,
+    silent_mode: bool,
+    alert_cooldown: &mut HashMap<String, Instant>,
+) {
     if let Some(alert) = &config.alert {
         if count >= alert.threshold {
+            if let Some(cooldown_mins) = alert.cooldown_minutes {
+                if let Some(&last_sent) = alert_cooldown.get(msg) {
+                    let cooldown = Duration::from_secs(cooldown_mins * 60);
+                    if last_sent.elapsed() < cooldown {
+                        if !silent_mode {
+                            eprintln!(
+                                "{} {} (x{}) {}",
+                                "ALERTE IGNOREE (cooldown):".dimmed(),
+                                msg.dimmed(),
+                                count,
+                                format!("(prochaine dans {} min)", cooldown_mins).dimmed()
+                            );
+                        }
+                        return;
+                    }
+                }
+            }
+
             if !silent_mode {
                 eprintln!("{} {} (x{})", "ENVOI ALERTE :".red().bold(), msg, count);
             }
@@ -464,6 +507,10 @@ fn check_alert(msg: &str, count: u32, config: &Config, silent_mode: bool) {
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .spawn();
+
+            if alert.cooldown_minutes.is_some() {
+                alert_cooldown.insert(msg.to_string(), Instant::now());
+            }
         }
     }
 }

@@ -22,6 +22,7 @@ Shrinker permet de :
 | Masquage IPv4/IPv6 | Remplace les IPs par `[MASKED_IPv4]` / `[MASKED_IPv6]` |
 | Parsing JSON | Extrait `msg`/`message` + `level` des logs JSON (Kubernetes, Docker) |
 | Alertes Webhook | Envoie une notification Discord/Slack si un message depasse un seuil |
+| Rate limiting alertes | `cooldown_minutes` : evite le spam (max 1 alerte par X min pour le meme message) |
 | Mode verbose | Affiche chaque ligne traitee et les raisons de filtrage |
 | Mode quiet | Aucune sortie sauf les logs traites |
 | Dry-run | Simule le traitement sans ecrire |
@@ -108,6 +109,7 @@ exclude_patterns:
 alert:
   webhook_url: "$DISCORD_WEBHOOK"   # ou URL en clair
   threshold: 50
+  cooldown_minutes: 15   # Max 1 alerte par 15 min pour le meme message (evite le spam)
 ```
 
 Generez un fichier de configuration avec `shrinker init`.
@@ -159,6 +161,7 @@ Consultez le [README du role](https://github.com/KarimHaddadi20/shrinker_role_an
 - [x] Sortie JSON (`--output-format json`) pour interoperabilite.
 - [x] Webhook via variable d'environnement (securite des secrets).
 - [x] Patterns d'inclusion configurables (ne garder que error, critical, etc.).
+- [x] Rate limiting des alertes (`cooldown_minutes` pour eviter le spam).
 
 ---
 Projet cree dans le cadre d'un apprentissage Rust oriente **DevOps & Infrastructure**.
