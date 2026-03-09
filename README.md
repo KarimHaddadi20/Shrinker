@@ -26,6 +26,7 @@ Shrinker permet de :
 | Mode quiet | Aucune sortie sauf les logs traites |
 | Dry-run | Simule le traitement sans ecrire |
 | Patterns d'exclusion | Ignore les lignes contenant certains mots-cles (health check, heartbeat...) |
+| Patterns d'inclusion | Ne conserve que les lignes contenant ces mots (error, critical, fatal...) |
 | Sortie JSON | `--output-format json` pour chaîner avec jq, Elasticsearch, Loki |
 | Webhook via env | `webhook_url: "$DISCORD_WEBHOOK"` pour eviter les secrets en clair |
 | `shrinker init` | Genere un `config.yaml` commente et pret a l'emploi |
@@ -95,6 +96,13 @@ exclude_patterns:
   # - "DEBUG"
   # - "keep-alive"
 
+# Patterns d'inclusion : si defini, seules les lignes contenant ces mots sont conservees
+# Laissez vide ou supprimez pour tout conserver
+# include_patterns:
+#   - "error"
+#   - "critical"
+#   - "fatal"
+
 # Alertes Webhook (optionnel)
 # webhook_url accepte une URL ou une variable d'environnement : $DISCORD_WEBHOOK
 alert:
@@ -150,6 +158,7 @@ Consultez le [README du role](https://github.com/KarimHaddadi20/shrinker_role_an
 - [x] Patterns d'exclusion configurables (health check, heartbeat, etc.).
 - [x] Sortie JSON (`--output-format json`) pour interoperabilite.
 - [x] Webhook via variable d'environnement (securite des secrets).
+- [x] Patterns d'inclusion configurables (ne garder que error, critical, etc.).
 
 ---
 Projet cree dans le cadre d'un apprentissage Rust oriente **DevOps & Infrastructure**.

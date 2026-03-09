@@ -18,6 +18,8 @@ struct Config {
     alert: Option<AlertConfig>,
     #[serde(default)]
     exclude_patterns: Vec<String>,
+    #[serde(default)]
+    include_patterns: Vec<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -99,6 +101,7 @@ struct Stats {
     sent: u64,
     skipped: u64,
     excluded: u64,
+    inclusion_filtered: u64,
     start_time: Instant,
 }
 
@@ -130,6 +133,13 @@ exclude_patterns:
   - "heartbeat"
   # - "DEBUG"
   # - "keep-alive"
+
+# Patterns d'inclusion : si defini, seules les lignes contenant ces mots sont conservees (case-insensitive)
+# Laissez vide [] pour tout conserver
+# include_patterns:
+#   - "error"
+#   - "critical"
+#   - "fatal"
 
 # Alertes Webhook (optionnel, decommentez pour activer)
 # webhook_url accepte une URL ou une variable d'environnement : $DISCORD_WEBHOOK ou ${DISCORD_WEBHOOK}
@@ -217,6 +227,7 @@ fn main() {
         sent: 0,
         skipped: 0,
         excluded: 0,
+        inclusion_filtered: 0,
         start_time: Instant::now(),
     };
 
@@ -267,6 +278,9 @@ fn main() {
         if !config.exclude_patterns.is_empty() {
             eprintln!("   Exclusions : {} pattern(s)", config.exclude_patterns.len().to_string().yellow());
         }
+        if !config.include_patterns.is_empty() {
+            eprintln!("   Inclusions : {} pattern(s)", config.include_patterns.len().to_string().yellow());
+        }
 
         if let Some(alert) = &config.alert {
             eprintln!("   Alertes : ACTIVE (Seuil: {})", alert.threshold.to_string().red().bold());
@@ -312,6 +326,9 @@ fn main() {
         eprintln!("   Seuil : {}", config.threshold);
         if !config.exclude_patterns.is_empty() {
             eprintln!("   Exclusions : {:?}", config.exclude_patterns);
+        }
+        if !config.include_patterns.is_empty() {
+            eprintln!("   Inclusions : {:?}", config.include_patterns);
         }
         if let Some(alert) = &config.alert {
             eprintln!("   Alertes : Seuil {}", alert.threshold);
@@ -365,6 +382,16 @@ fn process_logs(
             stats.excluded += 1;
             if verbosity == Verbosity::Verbose && !silent_mode {
                 eprintln!("  {} {}", "exclu".dimmed(), processed.dimmed());
+            }
+            continue;
+        }
+
+        if !config.include_patterns.is_empty()
+            && !config.include_patterns.iter().any(|p| lower.contains(&p.to_lowercase()))
+        {
+            stats.inclusion_filtered += 1;
+            if verbosity == Verbosity::Verbose && !silent_mode {
+                eprintln!("  {} {} {}", "inclusion".dimmed(), processed.dimmed(), "(ne matche pas)".dimmed());
             }
             continue;
         }
@@ -512,6 +539,9 @@ fn display_final_report(stats: &Stats) {
     eprintln!("   Filtre   : {}", stats.skipped);
     if stats.excluded > 0 {
         eprintln!("   Exclu    : {}", stats.excluded.to_string().yellow());
+    }
+    if stats.inclusion_filtered > 0 {
+        eprintln!("   Inclu filtre : {}", stats.inclusion_filtered.to_string().yellow());
     }
     eprintln!("   Economie : {}", format!("{}%", reduction).bright_green().bold());
     eprintln!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".bright_cyan());
