@@ -6,4 +6,5 @@ output_file: null # Mettre à null ou supprimer la ligne pour écrire dans la co
 # Section Alertes (Optionnel)
 # alert:
 #   webhook_url: "https://discord.com/api/webhooks/..."
-#   threshold: 10 # Si un message se répète 10 fois, on envoie une alerte !
+#   threshold: 10   # Si un message se répète 10 fois, on envoie une alerte
+#   cooldown_minutes: 15   # Max 1 alerte par 15 min pour le même message (évite le spam)

@@ -22,10 +22,12 @@ Shrinker permet de :
 | Masquage IPv4/IPv6 | Remplace les IPs par `[MASKED_IPv4]` / `[MASKED_IPv6]` |
 | Parsing JSON | Extrait `msg`/`message` + `level` des logs JSON (Kubernetes, Docker) |
 | Alertes Webhook | Envoie une notification Discord/Slack si un message depasse un seuil |
+| Rate limiting alertes | `cooldown_minutes` : evite le spam (max 1 alerte par X min pour le meme message) |
 | Mode verbose | Affiche chaque ligne traitee et les raisons de filtrage |
 | Mode quiet | Aucune sortie sauf les logs traites |
 | Dry-run | Simule le traitement sans ecrire |
 | Patterns d'exclusion | Ignore les lignes contenant certains mots-cles (health check, heartbeat...) |
+| Patterns d'inclusion | Ne conserve que les lignes contenant ces mots (error, critical, fatal...) |
 | Sortie JSON | `--output-format json` pour chaîner avec jq, Elasticsearch, Loki |
 | Webhook via env | `webhook_url: "$DISCORD_WEBHOOK"` pour eviter les secrets en clair |
 | `shrinker init` | Genere un `config.yaml` commente et pret a l'emploi |
@@ -102,11 +104,19 @@ exclude_patterns:
   # - "DEBUG"
   # - "keep-alive"
 
+# Patterns d'inclusion : si defini, seules les lignes contenant ces mots sont conservees
+# Laissez vide ou supprimez pour tout conserver
+# include_patterns:
+#   - "error"
+#   - "critical"
+#   - "fatal"
+
 # Alertes Webhook (optionnel)
 # webhook_url accepte une URL ou une variable d'environnement : $DISCORD_WEBHOOK
 alert:
   webhook_url: "$DISCORD_WEBHOOK"   # ou URL en clair
   threshold: 50
+  cooldown_minutes: 15   # Max 1 alerte par 15 min pour le meme message (evite le spam)
 ```
 
 Generez un fichier de configuration avec `shrinker init`.
@@ -159,6 +169,8 @@ Consultez le [README du role](https://github.com/KarimHaddadi20/shrinker_role_an
 - [x] Patterns d'exclusion configurables (health check, heartbeat, etc.).
 - [x] Sortie JSON (`--output-format json`) pour interoperabilite.
 - [x] Webhook via variable d'environnement (securite des secrets).
+- [x] Patterns d'inclusion configurables (ne garder que error, critical, etc.).
+- [x] Rate limiting des alertes (`cooldown_minutes` pour eviter le spam).
 - [x] Mode watch (`--watch`) : surveillance d'un fichier en continu.
 
 ---

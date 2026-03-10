@@ -3,6 +3,7 @@ use colored::*;
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Seek, SeekFrom, Write};
 use std::thread;
@@ -19,12 +20,17 @@ struct Config {
     alert: Option<AlertConfig>,
     #[serde(default)]
     exclude_patterns: Vec<String>,
+    #[serde(default)]
+    include_patterns: Vec<String>,
 }
 
 #[derive(Deserialize, Debug)]
 struct AlertConfig {
     webhook_url: String,
     threshold: u32,
+    /// Délai minimum (en minutes) entre deux alertes pour le même message
+    #[serde(default)]
+    cooldown_minutes: Option<u64>,
 }
 
 #[derive(Parser, Debug)]
@@ -108,6 +114,7 @@ struct Stats {
     sent: u64,
     skipped: u64,
     excluded: u64,
+    inclusion_filtered: u64,
     start_time: Instant,
 }
 
@@ -140,11 +147,19 @@ exclude_patterns:
   # - "DEBUG"
   # - "keep-alive"
 
+# Patterns d'inclusion : si defini, seules les lignes contenant ces mots sont conservees (case-insensitive)
+# Laissez vide [] pour tout conserver
+# include_patterns:
+#   - "error"
+#   - "critical"
+#   - "fatal"
+
 # Alertes Webhook (optionnel, decommentez pour activer)
 # webhook_url accepte une URL ou une variable d'environnement : $DISCORD_WEBHOOK ou ${DISCORD_WEBHOOK}
 # alert:
 #   webhook_url: "$DISCORD_WEBHOOK"
 #   threshold: 50
+#   cooldown_minutes: 15   # Max 1 alerte par 15 min pour le meme message (evite le spam)
 "#;
 
     if let Err(e) = fs::write(path, default_config) {
@@ -230,6 +245,7 @@ fn main() {
         sent: 0,
         skipped: 0,
         excluded: 0,
+        inclusion_filtered: 0,
         start_time: Instant::now(),
     };
 
@@ -280,9 +296,20 @@ fn main() {
         if !config.exclude_patterns.is_empty() {
             eprintln!("   Exclusions : {} pattern(s)", config.exclude_patterns.len().to_string().yellow());
         }
+        if !config.include_patterns.is_empty() {
+            eprintln!("   Inclusions : {} pattern(s)", config.include_patterns.len().to_string().yellow());
+        }
 
         if let Some(alert) = &config.alert {
-            eprintln!("   Alertes : ACTIVE (Seuil: {})", alert.threshold.to_string().red().bold());
+            let cooldown_info = alert
+                .cooldown_minutes
+                .map(|m| format!(", Cooldown: {} min", m))
+                .unwrap_or_default();
+            eprintln!(
+                "   Alertes : ACTIVE (Seuil: {}{})",
+                alert.threshold.to_string().red().bold(),
+                cooldown_info
+            );
         }
 
         if verbosity == Verbosity::Verbose {
@@ -355,13 +382,21 @@ fn main() {
         if !config.exclude_patterns.is_empty() {
             eprintln!("   Exclusions : {:?}", config.exclude_patterns);
         }
+        if !config.include_patterns.is_empty() {
+            eprintln!("   Inclusions : {:?}", config.include_patterns);
+        }
         if let Some(alert) = &config.alert {
-            eprintln!("   Alertes : Seuil {}", alert.threshold);
+            let cooldown_info = alert
+                .cooldown_minutes
+                .map(|m| format!(", Cooldown {} min", m))
+                .unwrap_or_default();
+            eprintln!("   Alertes : Seuil {}{}", alert.threshold, cooldown_info);
         }
         eprintln!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".bright_cyan());
     }
 
-    process_logs(input, &config, &ipv4_regex, &ipv6_regex, &mut stats, &mut output, is_stdout_mode, cli.dry_run, verbosity, output_format_json);
+    let mut alert_cooldown: HashMap<String, Instant> = HashMap::new();
+    process_logs(input, &config, &ipv4_regex, &ipv6_regex, &mut stats, &mut output, &mut alert_cooldown, is_stdout_mode, cli.dry_run, verbosity, output_format_json);
 
     if (!is_stdout_mode || cli.dry_run) && verbosity != Verbosity::Quiet {
         display_final_report(&stats);
@@ -403,6 +438,7 @@ fn process_logs_watch(
     let mut last_msg = String::new();
     let mut count: u32 = 0;
     let mut buffer = String::new();
+    let mut alert_cooldown: HashMap<String, Instant> = HashMap::new();
 
     loop {
         buffer.clear();
@@ -449,12 +485,22 @@ fn process_logs_watch(
             continue;
         }
 
+        if !config.include_patterns.is_empty()
+            && !config.include_patterns.iter().any(|p| lower.contains(&p.to_lowercase()))
+        {
+            stats.inclusion_filtered += 1;
+            if verbosity == Verbosity::Verbose && !silent_mode {
+                eprintln!("  {} {} {}", "inclusion".dimmed(), processed.dimmed(), "(ne matche pas)".dimmed());
+            }
+            continue;
+        }
+
         if processed == last_msg {
             count += 1;
         } else {
             if !last_msg.is_empty() {
                 if !dry_run {
-                    check_alert(&last_msg, count, config, silent_mode);
+                    check_alert(&last_msg, count, config, silent_mode, &mut alert_cooldown);
                 }
                 if count >= config.threshold {
                     if !dry_run {
@@ -483,6 +529,7 @@ fn process_logs(
     ipv6_regex: &Regex,
     stats: &mut Stats,
     output: &mut Box<dyn Write>,
+    alert_cooldown: &mut HashMap<String, Instant>,
     silent_mode: bool,
     dry_run: bool,
     verbosity: Verbosity,
@@ -519,12 +566,22 @@ fn process_logs(
             continue;
         }
 
+        if !config.include_patterns.is_empty()
+            && !config.include_patterns.iter().any(|p| lower.contains(&p.to_lowercase()))
+        {
+            stats.inclusion_filtered += 1;
+            if verbosity == Verbosity::Verbose && !silent_mode {
+                eprintln!("  {} {} {}", "inclusion".dimmed(), processed.dimmed(), "(ne matche pas)".dimmed());
+            }
+            continue;
+        }
+
         if processed == last_msg {
             count += 1;
         } else {
             if !last_msg.is_empty() {
                 if !dry_run {
-                    check_alert(&last_msg, count, config, silent_mode);
+                    check_alert(&last_msg, count, config, silent_mode, alert_cooldown);
                 }
                 if count >= config.threshold {
                     if !dry_run {
@@ -547,7 +604,7 @@ fn process_logs(
 
     if !last_msg.is_empty() {
         if !dry_run {
-            check_alert(&last_msg, count, config, silent_mode);
+            check_alert(&last_msg, count, config, silent_mode, alert_cooldown);
         }
         if count >= config.threshold {
             if !dry_run {
@@ -565,9 +622,33 @@ fn process_logs(
     }
 }
 
-fn check_alert(msg: &str, count: u32, config: &Config, silent_mode: bool) {
+fn check_alert(
+    msg: &str,
+    count: u32,
+    config: &Config,
+    silent_mode: bool,
+    alert_cooldown: &mut HashMap<String, Instant>,
+) {
     if let Some(alert) = &config.alert {
         if count >= alert.threshold {
+            if let Some(cooldown_mins) = alert.cooldown_minutes {
+                if let Some(&last_sent) = alert_cooldown.get(msg) {
+                    let cooldown = Duration::from_secs(cooldown_mins * 60);
+                    if last_sent.elapsed() < cooldown {
+                        if !silent_mode {
+                            eprintln!(
+                                "{} {} (x{}) {}",
+                                "ALERTE IGNOREE (cooldown):".dimmed(),
+                                msg.dimmed(),
+                                count,
+                                format!("(prochaine dans {} min)", cooldown_mins).dimmed()
+                            );
+                        }
+                        return;
+                    }
+                }
+            }
+
             if !silent_mode {
                 eprintln!("{} {} (x{})", "ENVOI ALERTE :".red().bold(), msg, count);
             }
@@ -587,6 +668,10 @@ fn check_alert(msg: &str, count: u32, config: &Config, silent_mode: bool) {
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .spawn();
+
+            if alert.cooldown_minutes.is_some() {
+                alert_cooldown.insert(msg.to_string(), Instant::now());
+            }
         }
     }
 }
@@ -662,6 +747,9 @@ fn display_final_report(stats: &Stats) {
     eprintln!("   Filtre   : {}", stats.skipped);
     if stats.excluded > 0 {
         eprintln!("   Exclu    : {}", stats.excluded.to_string().yellow());
+    }
+    if stats.inclusion_filtered > 0 {
+        eprintln!("   Inclu filtre : {}", stats.inclusion_filtered.to_string().yellow());
     }
     eprintln!("   Economie : {}", format!("{}%", reduction).bright_green().bold());
     eprintln!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".bright_cyan());
