@@ -3,6 +3,16 @@ threshold: 5
 # output_file: "rapport_final.log" # Décommentez pour écrire dans un fichier
 output_file: null # Mettre à null ou supprimer la ligne pour écrire dans la console (stdout)
 
+# Masquage des donnees sensibles (emails, mots de passe, tokens, cles API...)
+# Patterns : email, password, token, bearer_token, api_key, credit_card, aws_key
+sensitive_masking:
+  enabled: true
+  patterns:
+    - "email"
+    - "password"
+    - "token"
+    - "api_key"
+
 # Section Alertes (Optionnel)
 # alert:
 #   webhook_url: "https://discord.com/api/webhooks/..."

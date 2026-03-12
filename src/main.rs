@@ -21,6 +21,21 @@ struct Config {
     exclude_patterns: Vec<String>,
     #[serde(default)]
     include_patterns: Vec<String>,
+    #[serde(default)]
+    sensitive_masking: Option<SensitiveMaskingConfig>,
+}
+
+#[derive(Deserialize, Debug)]
+struct SensitiveMaskingConfig {
+    #[serde(default = "default_true")]
+    enabled: bool,
+    /// Noms des patterns prédéfinis : email, password, bearer_token, api_key, credit_card, aws_key
+    #[serde(default)]
+    patterns: Vec<String>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Deserialize, Debug)]
@@ -65,6 +80,10 @@ struct Cli {
     /// Desactiver le masquage des adresses IP
     #[arg(long)]
     no_mask_ips: bool,
+
+    /// Desactiver le masquage des donnees sensibles (emails, mots de passe, tokens...)
+    #[arg(long)]
+    no_mask_sensitive: bool,
 
     /// Mode simulation : affiche ce qui serait fait sans rien ecrire
     #[arg(long)]
@@ -145,6 +164,16 @@ exclude_patterns:
 #   - "critical"
 #   - "fatal"
 
+# Masquage des donnees sensibles (emails, mots de passe, tokens, cles API...)
+# Patterns disponibles : email, password, token, bearer_token, api_key, credit_card, aws_key
+# sensitive_masking:
+#   enabled: true
+#   patterns:
+#     - "email"
+#     - "password"
+#     - "token"
+#     - "api_key"
+
 # Alertes Webhook (optionnel, decommentez pour activer)
 # webhook_url accepte une URL ou une variable d'environnement : $DISCORD_WEBHOOK ou ${DISCORD_WEBHOOK}
 # alert:
@@ -205,6 +234,46 @@ fn load_config(path: &str) -> Config {
     }
 }
 
+/// Patterns prédéfinis : (nom, regex, remplacement)
+const PREDEFINED_SENSITIVE: &[(&str, &str, &str)] = &[
+    ("email", r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", "[MASKED_EMAIL]"),
+    ("password", r#"((?:password|passwd|pwd)['"]?\s*[:=]\s*['"]?)([^'"\s]+)"#, "$1[MASKED_PASSWORD]"),
+    ("bearer_token", r"([Bb]earer\s+)([A-Za-z0-9\-._~+/]+=*)", "$1[MASKED_TOKEN]"),
+    ("api_key", r#"((?:api[_-]?key|apikey)['"]?\s*[:=]\s*['"]?)([A-Za-z0-9\-_]+)"#, "$1[MASKED_API_KEY]"),
+    ("credit_card", r"\b\d{4}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}\b", "[MASKED_CC]"),
+    ("aws_key", r"AKIA[0-9A-Z]{16}", "[MASKED_AWS_KEY]"),
+    ("token", r#"((?:token|auth|secret)['"]?\s*[:=]\s*['"]?)([^'"\s]+)"#, "$1[MASKED_TOKEN]"),
+];
+
+fn build_sensitive_patterns(config: &Config) -> Vec<(Regex, &'static str)> {
+    let mut result = Vec::new();
+    if let Some(ref sm) = config.sensitive_masking {
+        if !sm.enabled {
+            return result;
+        }
+        for name in &sm.patterns {
+            let name_lower = name.to_lowercase();
+            for (pname, pat, repl) in PREDEFINED_SENSITIVE {
+                if name_lower == *pname {
+                    if let Ok(regex) = Regex::new(pat) {
+                        result.push((regex.clone(), *repl));
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    result
+}
+
+fn apply_sensitive_masking(text: &str, patterns: &[(Regex, &'static str)]) -> String {
+    let mut result = text.to_string();
+    for (regex, replacement) in patterns {
+        result = regex.replace_all(&result, *replacement).to_string();
+    }
+    result
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -261,6 +330,11 @@ fn main() {
         config.mask_ips = false;
     }
 
+    let mut sensitive_patterns = build_sensitive_patterns(&config);
+    if cli.no_mask_sensitive {
+        sensitive_patterns.clear();
+    }
+
     let ipv4_regex = Regex::new(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}").unwrap();
     let ipv6_regex = Regex::new(
         r"(?i)[0-9a-f]{1,4}(:[0-9a-f]{1,4}){7}|([0-9a-f]{1,4}:)+:([0-9a-f]{1,4}:)*[0-9a-f]{1,4}|([0-9a-f]{1,4}:)+:|::[0-9a-f]{1,4}(:[0-9a-f]{1,4})*|::"
@@ -278,6 +352,9 @@ fn main() {
         let output_target = config.output_file.as_ref().unwrap();
         eprintln!("   Sortie : {}", output_target.bright_magenta());
         eprintln!("   Securite IP : {}", if config.mask_ips { "ACTIVE".green() } else { "INACTIVE".red() });
+        if !sensitive_patterns.is_empty() {
+            eprintln!("   Donnees sensibles : {} pattern(s)", sensitive_patterns.len().to_string().green());
+        }
         eprintln!("   Seuil : {}", config.threshold.to_string().yellow());
 
         if !config.exclude_patterns.is_empty() {
@@ -336,6 +413,7 @@ fn main() {
         eprintln!("{}", "MODE DRY-RUN (Simulation, aucune ecriture)".bright_yellow().bold());
         eprintln!("   Source : {}", cli.file.as_deref().unwrap_or("stdin"));
         eprintln!("   Masquage IP : {}", if config.mask_ips { "ACTIVE" } else { "INACTIVE" });
+        eprintln!("   Masquage sensibles : {}", if sensitive_patterns.is_empty() { "INACTIVE" } else { "ACTIVE" });
         eprintln!("   Seuil : {}", config.threshold);
         if !config.exclude_patterns.is_empty() {
             eprintln!("   Exclusions : {:?}", config.exclude_patterns);
@@ -354,7 +432,7 @@ fn main() {
     }
 
     let mut alert_cooldown: HashMap<String, Instant> = HashMap::new();
-    process_logs(input, &config, &ipv4_regex, &ipv6_regex, &mut stats, &mut output, &mut alert_cooldown, is_stdout_mode, cli.dry_run, verbosity, output_format_json);
+    process_logs(input, &config, &ipv4_regex, &ipv6_regex, &sensitive_patterns, &mut stats, &mut output, &mut alert_cooldown, is_stdout_mode, cli.dry_run, verbosity, output_format_json);
 
     if (!is_stdout_mode || cli.dry_run) && verbosity != Verbosity::Quiet {
         display_final_report(&stats);
@@ -366,6 +444,7 @@ fn process_logs(
     config: &Config,
     ipv4_regex: &Regex,
     ipv6_regex: &Regex,
+    sensitive_patterns: &[(Regex, &'static str)],
     stats: &mut Stats,
     output: &mut Box<dyn Write>,
     alert_cooldown: &mut HashMap<String, Instant>,
@@ -394,6 +473,9 @@ fn process_logs(
         if config.mask_ips {
             processed = ipv4_regex.replace_all(&processed, "[MASKED_IPv4]").to_string();
             processed = ipv6_regex.replace_all(&processed, "[MASKED_IPv6]").to_string();
+        }
+        if !sensitive_patterns.is_empty() {
+            processed = apply_sensitive_masking(&processed, sensitive_patterns);
         }
 
         let lower = processed.to_lowercase();

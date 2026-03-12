@@ -9,7 +9,7 @@ Il est particulierement adapte pour tourner sur des infrastructures a ressources
 Dans une infrastructure moderne, 70% des logs sont du "bruit" (repetitions, messages de succes inutiles). Les fournisseurs Cloud facturent au volume.
 Shrinker permet de :
 - **Reduire le volume de logs** de 60% a 90% via un dedoublonnage intelligent.
-- **Securiser les donnees** en masquant automatiquement les adresses IP (IPv4 et IPv6).
+- **Securiser les donnees** en masquant les IP (IPv4/IPv6), emails, mots de passe, tokens et cles API.
 - **Parser les logs JSON** (Kubernetes, Docker) automatiquement.
 - **Alerter en temps reel** via Webhook (Discord/Slack) en cas d'erreur critique.
 - **Economiser de l'argent** en ne transmettant que les informations critiques.
@@ -20,6 +20,7 @@ Shrinker permet de :
 |----------------|-------------|
 | Deduplication intelligente | Regroupe les messages repetes avec un compteur `[x6]` |
 | Masquage IPv4/IPv6 | Remplace les IPs par `[MASKED_IPv4]` / `[MASKED_IPv6]` |
+| Masquage donnees sensibles | Emails, mots de passe, tokens, cles API, cartes bancaires... (configurable) |
 | Parsing JSON | Extrait `msg`/`message` + `level` des logs JSON (Kubernetes, Docker) |
 | Alertes Webhook | Envoie une notification Discord/Slack si un message depasse un seuil |
 | Rate limiting alertes | `cooldown_minutes` : evite le spam (max 1 alerte par X min pour le meme message) |
@@ -68,6 +69,9 @@ shrinker --file app.log --threshold 10
 # Desactiver le masquage IP
 shrinker --file app.log --no-mask-ips
 
+# Desactiver le masquage des donnees sensibles
+shrinker --file app.log --no-mask-sensitive
+
 # Simulation (rien n'est ecrit)
 shrinker --file app.log --dry-run
 
@@ -104,6 +108,16 @@ exclude_patterns:
 #   - "critical"
 #   - "fatal"
 
+# Masquage des donnees sensibles (emails, mots de passe, tokens, cles API...)
+# Patterns : email, password, token, bearer_token, api_key, credit_card, aws_key
+# sensitive_masking:
+#   enabled: true
+#   patterns:
+#     - "email"
+#     - "password"
+#     - "token"
+#     - "api_key"
+
 # Alertes Webhook (optionnel)
 # webhook_url accepte une URL ou une variable d'environnement : $DISCORD_WEBHOOK
 alert:
@@ -127,6 +141,7 @@ Options:
   -c, --config <CONFIG>       Fichier de configuration YAML [default: config.yaml]
   -t, --threshold <THRESHOLD> Surcharge le seuil du config.yaml
       --no-mask-ips           Desactiver le masquage IP
+      --no-mask-sensitive     Desactiver le masquage des donnees sensibles
       --dry-run               Simulation sans ecriture
   -v, --verbose               Affiche chaque ligne traitee
   -q, --quiet                 N'affiche que les erreurs critiques
@@ -162,6 +177,7 @@ Consultez le [README du role](https://github.com/KarimHaddadi20/shrinker_role_an
 - [x] Webhook via variable d'environnement (securite des secrets).
 - [x] Patterns d'inclusion configurables (ne garder que error, critical, etc.).
 - [x] Rate limiting des alertes (`cooldown_minutes` pour eviter le spam).
+- [x] Masquage des donnees sensibles (emails, mots de passe, tokens, cles API...).
 
 ---
 Projet cree dans le cadre d'un apprentissage Rust oriente **DevOps & Infrastructure**.
