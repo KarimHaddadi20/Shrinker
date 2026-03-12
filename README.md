@@ -32,6 +32,7 @@ Shrinker permet de :
 | Sortie JSON | `--output-format json` pour chaîner avec jq, Elasticsearch, Loki |
 | Webhook via env | `webhook_url: "$DISCORD_WEBHOOK"` pour eviter les secrets en clair |
 | `shrinker init` | Genere un `config.yaml` commente et pret a l'emploi |
+| Mode watch | `--watch` : surveille un fichier en continu (comme tail -f) |
 
 ## Installation
 
@@ -56,6 +57,12 @@ shrinker --file production.log
 
 # Mode temps reel (pipe Unix)
 tail -f /var/log/syslog | shrinker > clean.log
+
+# Mode watch : surveille un fichier en continu (comme tail -f)
+shrinker --file app.log --watch
+
+# Mode watch : ignorer le contenu existant, ne traiter que les nouvelles lignes
+shrinker --file app.log --watch --skip-initial
 
 # Mode verbose (debug)
 shrinker --file app.log --verbose
@@ -146,6 +153,8 @@ Options:
   -v, --verbose               Affiche chaque ligne traitee
   -q, --quiet                 N'affiche que les erreurs critiques
       --output-format <FMT>   Format de sortie : text (defaut) ou json
+  -w, --watch                 Surveille le fichier en continu (requiert --file)
+      --skip-initial          En mode watch : ignorer le contenu existant
   -h, --help                  Aide
   -V, --version               Version
 ```
@@ -178,6 +187,7 @@ Consultez le [README du role](https://github.com/KarimHaddadi20/shrinker_role_an
 - [x] Patterns d'inclusion configurables (ne garder que error, critical, etc.).
 - [x] Rate limiting des alertes (`cooldown_minutes` pour eviter le spam).
 - [x] Masquage des donnees sensibles (emails, mots de passe, tokens, cles API...).
+- [x] Mode watch (`--watch`) : surveillance d'un fichier en continu.
 
 ---
 Projet cree dans le cadre d'un apprentissage Rust oriente **DevOps & Infrastructure**.

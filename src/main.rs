@@ -4,8 +4,9 @@ use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::fs::{self, File};
-use std::io::{self, BufRead, BufReader, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, BufRead, BufReader, Seek, SeekFrom, Write};
+use std::thread;
 use std::time::{Duration, Instant};
 use chrono::{Local, Utc};
 use std::process::{self, Command};
@@ -100,6 +101,14 @@ struct Cli {
     /// Format de sortie : text (defaut) ou json (une ligne JSON par entree, compatible jq/Elasticsearch)
     #[arg(long, default_value = "text")]
     output_format: String,
+
+    /// Mode watch : surveille le fichier en continu (comme tail -f), requiert --file
+    #[arg(short, long)]
+    watch: bool,
+
+    /// En mode watch : ignorer le contenu existant, ne traiter que les nouvelles lignes
+    #[arg(long)]
+    skip_initial: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -286,6 +295,10 @@ fn main() {
         exit_error("--verbose et --quiet ne peuvent pas etre utilises ensemble");
     }
 
+    if cli.watch && cli.file.is_none() {
+        exit_error("--watch requiert --file <FICHIER>");
+    }
+
     let output_format_json = matches!(cli.output_format.to_lowercase().as_str(), "json" | "j");
 
     let verbosity = if cli.quiet {
@@ -387,11 +400,40 @@ fn main() {
         Box::new(io::stdout())
     } else {
         let path = config.output_file.as_ref().unwrap();
-        match File::create(path) {
+        let file = if cli.watch {
+            OpenOptions::new().append(true).create(true).open(path)
+        } else {
+            File::create(path)
+        };
+        match file {
             Ok(f) => Box::new(f),
             Err(e) => exit_error(&format!("impossible de creer le fichier de sortie '{}': {}", path, e)),
         }
     };
+
+    if cli.watch {
+        let path = cli.file.as_ref().unwrap().clone();
+        if verbosity != Verbosity::Quiet {
+            eprintln!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".bright_cyan());
+            eprintln!("{} {}", "MODE WATCH - Surveillance en cours".bright_green().bold(), path.yellow());
+            eprintln!("   {} pour arreter", "Ctrl+C".bright_yellow());
+            eprintln!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".bright_cyan());
+        }
+        process_logs_watch(
+            &path,
+            cli.skip_initial,
+            &config,
+            &ipv4_regex,
+            &ipv6_regex,
+            &mut stats,
+            &mut output,
+            is_stdout_mode,
+            cli.dry_run,
+            verbosity,
+            output_format_json,
+        );
+        return;
+    }
 
     let input: Box<dyn BufRead> = match cli.file {
         Some(ref path) => {
@@ -436,6 +478,125 @@ fn main() {
 
     if (!is_stdout_mode || cli.dry_run) && verbosity != Verbosity::Quiet {
         display_final_report(&stats);
+    }
+}
+
+const WATCH_POLL_INTERVAL_MS: u64 = 500;
+
+fn process_logs_watch(
+    path: &str,
+    skip_initial: bool,
+    config: &Config,
+    ipv4_regex: &Regex,
+    ipv6_regex: &Regex,
+    stats: &mut Stats,
+    output: &mut Box<dyn Write>,
+    silent_mode: bool,
+    dry_run: bool,
+    verbosity: Verbosity,
+    output_format_json: bool,
+) {
+    let mut file = match File::open(path) {
+        Ok(f) => f,
+        Err(e) => {
+            if e.kind() == io::ErrorKind::NotFound {
+                exit_error(&format!("fichier '{}' introuvable", path));
+            }
+            exit_error(&format!("impossible d'ouvrir '{}': {}", path, e));
+        }
+    };
+
+    if skip_initial {
+        if let Err(e) = file.seek(SeekFrom::End(0)) {
+            exit_error(&format!("impossible de se positionner en fin de fichier: {}", e));
+        }
+    }
+
+    let mut reader = BufReader::new(file);
+    let mut last_msg = String::new();
+    let mut count: u32 = 0;
+    let mut buffer = String::new();
+    let mut alert_cooldown: HashMap<String, Instant> = HashMap::new();
+
+    loop {
+        buffer.clear();
+        match reader.read_line(&mut buffer) {
+            Ok(0) => {
+                let pos = reader.stream_position().unwrap_or(0);
+                if let Ok(meta) = fs::metadata(path) {
+                    if meta.len() < pos {
+                        let _ = reader.seek(SeekFrom::Start(0));
+                        last_msg.clear();
+                        count = 0;
+                    }
+                }
+                thread::sleep(Duration::from_millis(WATCH_POLL_INTERVAL_MS));
+                continue;
+            }
+            Ok(_) => {}
+            Err(_) => break,
+        }
+
+        let line = buffer.trim_end_matches('\n').trim_end_matches('\r');
+        if line.is_empty() {
+            continue;
+        }
+
+        stats.total += 1;
+
+        if verbosity == Verbosity::Verbose && !silent_mode {
+            eprintln!("  {} {}", format!("#{}", stats.total).dimmed(), line.dimmed());
+        }
+
+        let mut processed = extract_message(line);
+        if config.mask_ips {
+            processed = ipv4_regex.replace_all(&processed, "[MASKED_IPv4]").to_string();
+            processed = ipv6_regex.replace_all(&processed, "[MASKED_IPv6]").to_string();
+        }
+
+        let lower = processed.to_lowercase();
+        if config.exclude_patterns.iter().any(|p| lower.contains(&p.to_lowercase())) {
+            stats.excluded += 1;
+            if verbosity == Verbosity::Verbose && !silent_mode {
+                eprintln!("  {} {}", "exclu".dimmed(), processed.dimmed());
+            }
+            continue;
+        }
+
+        if !config.include_patterns.is_empty()
+            && !config.include_patterns.iter().any(|p| lower.contains(&p.to_lowercase()))
+        {
+            stats.inclusion_filtered += 1;
+            if verbosity == Verbosity::Verbose && !silent_mode {
+                eprintln!("  {} {} {}", "inclusion".dimmed(), processed.dimmed(), "(ne matche pas)".dimmed());
+            }
+            continue;
+        }
+
+        if processed == last_msg {
+            count += 1;
+        } else {
+            if !last_msg.is_empty() {
+                if !dry_run {
+                    check_alert(&last_msg, count, config, silent_mode, &mut alert_cooldown);
+                }
+                if count >= config.threshold {
+                    if !dry_run {
+                        print_log(count, &last_msg, output, silent_mode, output_format_json);
+                    } else if verbosity != Verbosity::Quiet {
+                        eprintln!("  {} [x{}] {}", ">>".bright_yellow(), count, last_msg);
+                    }
+                    stats.sent += 1;
+                } else {
+                    stats.skipped += 1;
+                    if verbosity == Verbosity::Verbose && !silent_mode {
+                        eprintln!("  {} [x{}] {} {}", "skip".dimmed(), count, last_msg.dimmed(), format!("(< seuil {})", config.threshold).dimmed());
+                    }
+                }
+            }
+            last_msg = processed;
+            count = 1;
+        }
     }
 }
 
